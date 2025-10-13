@@ -1,0 +1,20 @@
+{"instruction":"다음 질문에 한국어로만 간결하게 답하세요. 모르면 '모르겠습니다.'라고 답하세요. 기본 존댓말을 사용하세요.","input":"퀀텀 컴퓨팅의 현재 상용화 수준은 어떻습니까?","output":"현재 광범위한 상용화 단계는 아니며, 특정 최적화·시뮬레이션 등의 제한된 연구 및 PoC 단계가 주를 이룹니다."}
+{"instruction":"아래 질문에 영어로만 간결하게 answer. If uncertain, say 'I don't know.' Default tone: polite. ","input":"What is the P/E ratio definition?","output":"P/E ratio is price divided by earnings per share."}
+{"instruction":"한국어로만 답하세요. 모르면 '모르겠습니다.'라고 하세요. 기본 존댓말.","input":"2027년에 코스피가 얼마일까요?","output":"모르겠습니다."}
+{"instruction":"질문한 언어(한국어)로만 대답하세요. 요청이 없으면 존댓말을 유지하세요.","input":"삼성전자 PER 계산 방법만 알려주세요.","output":"PER은 시가총액을 당기순이익으로 나눈 값이며, 보통 주당 가격을 주당순이익(EPS)으로 나누어 계산합니다."}
+{"instruction":"질문한 언어(영어)로만 답하고, if uncertain, answer 'I don't know.' Keep a polite tone.","input":"Will NVIDIA's revenue grow 50% next year?","output":"I don't know."}
+{"instruction":"말투 변경 요청: 반말로 답해줘. 질문한 언어(한국어)로만 답하기. 모르면 '모르겠다'고 간단히.","input":"딥러닝이 왜 어려운지 한 줄로 말해줘.","output":"모델 복잡도와 데이터/계산 자원 요구가 커서 일반화와 안정적 학습이 어렵기 때문이야."}
+{"instruction":"말투 변경 요청: 격식체(존댓말보다 더 공손)로 답하시오. 한국어만 사용. 모르면 '모르겠습니다.'","input":"RAG와 파인튜닝의 차이를 한 문장으로 설명해 주세요.","output":"RAG는 외부 지식을 검색·인용하여 답변하고, 파인튜닝은 모델 내부 가중치에 특정 스타일과 지식을 일부 내재화하여 응답하도록 합니다."}
+{"instruction":"말투 변경 요청이 없으면 기본 존댓말. 한국어만. 모르면 '모르겠습니다.'","input":"라플라스 변환의 기본 정의만 말해주세요.","output":"라플라스 변환은 함수 f(t)에 대해 F(s)=∫₀^∞ f(t)e^{-st} dt 로 정의됩니다."}
+{"instruction":"영어로만 answer; Tone change request: casual. If uncertain, say 'I don't know.'","input":"Explain dropout in one line.","output":"Dropout randomly disables units during training to reduce overfitting."}
+{"instruction":"혼합 언어를 사용하지 말고 질문 언어(한국어)만 사용하세요. 모르면 '모르겠습니다.'","input":"데이터베이스 정규화 제1정규형만 정의해주세요.","output":"제1정규형은 모든 속성이 원자값만을 가지도록 테이블을 구성하는 형태입니다."}
+{"instruction":"한국어만. 요청 시 반말 전환. 모르면 '모르겠습니다.'","input":"내일 코스피가 오를까? 반말로 대답해줘.","output":"모르겠다."}
+{"instruction":"영어만. Default polite; if asked, switch to a different tone. If uncertain, say 'I don't know.'","input":"What is the chain rule?","output":"The chain rule states that d/dx f(g(x)) = f'(g(x)) · g'(x)."}
+{"instruction":"한국어만. 기본 존댓말. 모르면 '모르겠습니다.'","input":"ChatGPT 내부 파라미터 수 정확히 말해봐요.","output":"모르겠습니다."}
+{"instruction":"영어만. Default polite. No speculation; if uncertain: 'I don't know.'","input":"What are the exact 2028 GDP figures for South Korea?","output":"I don't know."}
+{"instruction":"요청 시 말투 전환: 한국어 반말. 질문한 언어로만. 모르면 '모르겠다'.","input":"벡터 검색과 BM25의 차이를 한 줄로만 설명해줘.","output":"벡터 검색은 의미 유사도를, BM25는 단어 빈도와 역문서 빈도 기반의 키워드 일치도를 활용해."}
+{"instruction":"한국어만. 기본 존댓말. 모르면 '모르겠습니다.'","input":"'한 문장으로만'이라는 제약을 지켜주세요: RAG의 장점을 말해 주세요.","output":"지식을 갱신 가능하고 출처를 제시할 수 있어 신뢰성과 유지보수성이 높습니다."}
+{"instruction":"영어만. Default polite. If the user asks to switch tone to 'formal', comply.","input":"(Please answer in formal tone) Define gradient descent in one line.","output":"Gradient descent iteratively updates parameters in the direction of the negative gradient to minimize a loss function."}
+{"instruction":"한국어만. 기본 존댓말. 모르면 '모르겠습니다.'","input":"'모르는 내용이면 추측하지 말 것'—AlphaFold의 현재 한계 한 줄로.","output":"복잡한 동적 상호작용과 후번역 수정 등 일부 생물학적 현상을 충분히 반영하지 못합니다."}
+{"instruction":"영어만. Default polite. If uncertain: 'I don't know.'","input":"What was the closing price of KOSPI today?","output":"I don't know."}
+{"instruction":"한국어만. 요청 시 비격식 반말. 모르면 '모르겠다'.","input":"'반말로'—과적합을 막는 쉬운 방법 한 가지만 말해줘.","output":"데이터를 더 모으거나 증강해서 일반화를 높이는 게 좋아."}
