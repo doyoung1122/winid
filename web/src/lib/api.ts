@@ -1,4 +1,5 @@
-export const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:8000";
+export const API_BASE =
+  import.meta.env.VITE_API_URL || "http://localhost:8000";
 
 export async function uploadFile(file: File) {
   const form = new FormData();
@@ -9,30 +10,47 @@ export async function uploadFile(file: File) {
   return data;
 }
 
-export async function* streamQuery(body: any) {
+// ---------- REST 전용 ----------
+
+export type SourceMeta = {
+  label: string;
+  filepath: string;
+  filename?: string;
+  page?: number;
+  similarity?: number;
+};
+
+export type AskQueryResult = {
+  ok: boolean;
+  answer: string;
+  sources: SourceMeta[];
+};
+
+/** REST(JSON) 단발 요청 */
+export async function askQuery(
+  body: any,
+  opts?: { signal?: AbortSignal }
+): Promise<AskQueryResult> {
   const res = await fetch(`${API_BASE}/query`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "application/json",
+    },
     body: JSON.stringify(body),
+    signal: opts?.signal,
   });
-  if (!res.ok || !res.body) {
-    let text = "";
-    try { text = await res.text(); } catch {}
-    throw new Error(text || `HTTP ${res.status}`);
+
+  if (!res.ok) {
+    let detail = "";
+    try { detail = await res.text(); } catch {}
+    throw new Error(`HTTP ${res.status} ${res.statusText} ${detail}`.trim());
   }
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder("utf-8");
-  let done = false;
-  while (!done) {
-    const r = await reader.read();
-    done = r.done!;
-    const chunk = decoder.decode(r.value || new Uint8Array(), { stream: !done });
-    const parts = chunk.split("\n\n").filter(Boolean);
-    for (const p of parts) {
-      if (!p.startsWith("data:")) continue;
-      const payload = p.replace(/^data:\s*/, "");
-      if (payload === "[DONE]") return;
-      yield payload;
-    }
-  }
+
+  const json = await res.json();
+  return {
+    ok: !!json?.ok,
+    answer: String(json?.answer ?? ""),
+    sources: Array.isArray(json?.sources) ? json.sources : [],
+  };
 }

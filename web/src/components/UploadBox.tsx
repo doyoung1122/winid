@@ -1,9 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { uploadFile as uploadFileApi } from "../lib/api";
 
 type Status = "idle" | "hover" | "uploading" | "success" | "error";
 
-/** 현재 접속 호스트 기준 기본 API 주소 (포트만 8000으로 치환) */
 function getDefaultApiBase() {
   const { protocol, hostname } = window.location;
   return `${protocol}//${hostname}:8000`;
@@ -23,14 +21,24 @@ export default function UploadBox() {
 
   const onSelect = (f: File | null) => {
     if (!f) return;
-    const okType =
-      f.type.includes("pdf") ||
-      f.type.includes("text") ||
-      f.name.endsWith(".txt") ||
-      f.name.endsWith(".md");
+
+    const name = f.name.toLowerCase();
+    const type = (f.type || "").toLowerCase();
+    const okExt = /\.(pdf|txt|md|ppt|pptx|doc|docx|hwp|hwpx)$/i.test(name);
+    const okMime =
+      type.includes("pdf") ||
+      type.includes("text") ||
+      type.includes("markdown") ||
+      type.includes("presentation") ||
+      type.includes("word") ||
+      type.includes("officedocument") ||
+      type.includes("hangul"); // 일부 HWP MIME
+
+    const okType = okExt || okMime;
+
     if (!okType) {
       setStatus("error");
-      setMessage("PDF, TXT, MD만 지원합니다.");
+      setMessage("PDF / TXT / MD / PPT / DOC / HWP 지원");
       setFile(null);
       return;
     }
@@ -50,13 +58,11 @@ export default function UploadBox() {
     setStatus("uploading");
     setMessage("업로드 중… 문서를 처리하고 임베딩을 저장합니다.");
 
-    // 업로드에 타임아웃(60s) 적용
+    // 타임아웃
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 60_000);
+    const timeout = setTimeout(() => controller.abort(), 120_000);
 
     try {
-      // lib/api의 uploadFile은 기본적으로 VITE_API_URL을 사용하므로
-      // 여기서는 API_BASE를 강제 적용해준다.
       const form = new FormData();
       form.append("file", file);
 
@@ -79,7 +85,7 @@ export default function UploadBox() {
     } catch (e: any) {
       if (e?.name === "AbortError") {
         setStatus("error");
-        setMessage("❌ 업로드 시간 초과(60초). 네트워크 또는 서버 상태를 확인해주세요.");
+        setMessage("❌ 업로드 시간 초과(120초). 네트워크 또는 서버 상태를 확인해주세요.");
       } else {
         setStatus("error");
         setMessage(`❌ 서버에 연결할 수 없습니다. (${e?.message || "network error"})`);
@@ -107,7 +113,6 @@ export default function UploadBox() {
   const isError = status === "error";
   const isHover = status === "hover";
 
-  // 모바일/외부 접속 시 localhost 경고
   const showLocalhostWarn =
     /localhost|127\.0\.0\.1/i.test(API_BASE) &&
     !/localhost|127\.0\.0\.1/i.test(window.location.hostname);
@@ -116,12 +121,7 @@ export default function UploadBox() {
     <div className="w-full max-w-2xl mx-auto">
       <div className="mb-4 text-center">
         <h1 className="text-2xl font-bold tracking-tight text-gray-900">📚 문서 업로더</h1>
-        <p className="text-gray-600 mt-1">
-          PDF / TXT / MD 업로드 → 청킹 → 임베딩 → Supabase 저장까지 자동 처리합니다.
-        </p>
-
         <div className="mt-2 text-xs text-gray-500">
-
           {showLocalhostWarn && (
             <span className="ml-2 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-amber-800">
               ⚠️ 현재 API가 localhost로 설정되어 있어 외부(모바일)에서 업로드가 실패합니다.
@@ -156,7 +156,19 @@ export default function UploadBox() {
               type="file"
               className="hidden"
               onChange={(e) => onSelect(e.target.files?.[0] ?? null)}
-              accept=".pdf,.txt,.md,application/pdf,text/plain,text/markdown"
+              // 확장자 및 MIME 모두 허용 (브라우저별 MIME 편차 커버)
+              accept={[
+                ".pdf,.txt,.md,.ppt,.pptx,.doc,.docx,.hwp,.hwpx",
+                "application/pdf",
+                "text/plain",
+                "text/markdown",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/msword",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                "application/vnd.ms-powerpoint",
+                "application/haansofthwp",
+                "application/x-hwp",
+              ].join(",")}
             />
             <span className="text-xs text-gray-500">최대 100MB</span>
           </div>

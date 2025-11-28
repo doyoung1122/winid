@@ -1,5 +1,4 @@
 import os
-import math
 from typing import List, Optional, Union, Literal
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -22,7 +21,7 @@ PASSAGE_PREFIX = os.getenv("PASSAGE_PREFIX", "Represent this document for retrie
 # 모델 로드
 # -----------------------------
 print(f"[emb] loading model: {MODEL_ID} on {DEVICE} ({DTYPE})")
-torch_dtype = torch.float16 if DTYPE == "float16" and DEVICE.startswith("cuda") else torch.float32
+dtype = torch.float16 if DTYPE == "float16" and DEVICE.startswith("cuda") else torch.float32
 model = SentenceTransformer(MODEL_ID, device=DEVICE)
 model.max_seq_length = 512  # 필요 시 조정
 
