@@ -39,7 +39,7 @@
 
 ---
 
-# 📥 Llama 3.1 모델 다운로드 안내 (LLM Server)
+## 📥 Llama 3.1 모델 다운로드 안내 (LLM Server)
 
 LLM 서버(`llm_service`)는 Meta에서 공개한 **Llama 3.1 Instruct 모델**을 사용합니다.
 
