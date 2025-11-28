@@ -142,16 +142,14 @@ app.add_middleware(
 )
 
 # ===================================
-# Helper: Llama 3.1 호환 프롬프트 빌더
-#  - system -> (optional) context_system -> trimmed history -> user
-#  - history는 토큰 예산으로 최신부터 포함
+# Llama 3.1 호환 프롬프트 빌더 https://www.llama.com/docs/model-cards-and-prompt-formats/llama3_1/
 # ===================================
 def pack(role: str, content: str) -> str:
     return f"<|start_header_id|>{role}<|end_header_id|>\n{content}\n<|eot_id|>"
 
 def build_prompt(
     system: str,
-    context_sys: str,                # 문서 컨텍스트를 system으로 분리 주입
+    context_sys: str,
     history: List[Tuple[str, str]],
     user_msg: str,
     max_input_len: int
@@ -207,7 +205,7 @@ def _warmup():
         if torch.cuda.is_available():
             torch.cuda.synchronize()
             torch.cuda.empty_cache()
-        print("[llm] warm-up done ✅")
+        print("[llm] warm-up done")
     except Exception as e:
         print("[llm] warm-up failed:", e)
 

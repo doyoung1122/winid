@@ -24,10 +24,11 @@ const {
   matchDocuments,
 } = require("../db/repo.js");
 
-
 const { chunkTextTokens } = require("./chunk.js");
 
-// ===== 임베딩/정규화 헬퍼 =====
+// =========================
+// 임베딩/정규화 헬퍼
+// =========================
 async function getEmbedding(text, mode = "passage") {
   const r = await fetch(`${EMB_URL}/embed`, {
     method: "POST",
@@ -67,17 +68,20 @@ function rowToSentence(tableTitle, headers, row) {
 const PORT = Number(process.env.PORT || 8000);
 const EMB_URL = (process.env.EMB_URL || "http://127.0.0.1:8001").replace(/\/$/, "");
 const LLM_URL = (process.env.LLM_URL || "http://127.0.0.1:8002").replace(/\/$/, "");
-//onst VISION_URL = (process.env.VISION_URL || "http://127.0.0.1:8003").replace(/\/$/, ""); // 🔒 llama3.2 vision 비활성
+// const VISION_URL = (process.env.VISION_URL || "http://127.0.0.1:8003").replace(/\/$/, ""); // 🔒 llama3.2 vision 비활성
 const HWP2TXT_EXE = process.env.HWP2TXT_EXE || "";
 const PUBLIC_BASE = (process.env.PUBLIC_BASE || `http://127.0.0.1:${PORT}`).replace(/\/$/, "");
 
-// === 옵션 A 플래그 ===
-// true면 PDF/Office는 무조건 Unstructured로 텍스트+표를 일괄 추출
-const ALWAYS_UNSTRUCTURED = String(process.env.ALWAYS_UNSTRUCTURED || "true") === "true";
+// === 옵션 플래그 ===
+// PDF/Office를 무조건 Unstructured로 처리할지 여부 (기본: false → pdf-parse 먼저 시도)
+const ALWAYS_UNSTRUCTURED = String(process.env.ALWAYS_UNSTRUCTURED || "false") === "true";
 
-// 표/캡션 처리 한도(운영비/성능 조절) — 필요 시 사용
-const MAX_TABLE_ROWS_EMB = Number(process.env.MAX_TABLE_ROWS_EMB || 500);
+// 표/캡션 처리 한도(운영비/성능 조절)
+const MAX_TABLE_ROWS_EMB = Number(process.env.MAX_TABLE_ROWS_EMB || 50);   // 기본 50으로 축소
 const MAX_CAPTION_PAGES = Number(process.env.MAX_CAPTION_PAGES || 10);
+
+// PDF 페이지를 PNG로 렌더링할지 여부 (썸네일/뷰어 필요 없으면 false)
+const RENDER_PAGES = String(process.env.RENDER_PAGES || "false") === "true";
 
 const app = express();
 
@@ -153,7 +157,9 @@ async function saveOriginalFile(buffer, originalName) {
   const storedName = `${sha.slice(0, 8)}_${Date.now()}_${base}${ext}`;
   const absPath = path.join(dayDir, storedName);
   await fsp.writeFile(absPath, buffer);
-  const relPath = path.relative(__dirname, absPath).replace(/\\/g, "/");
+  const relPath = path
+    .relative(__dirname, absPath)
+    .replace(/\\/g, "/");
   return { absPath, relPath, sha };
 }
 
@@ -190,10 +196,11 @@ async function extractWithUnstructuredOnce(fileBuffer, filename) {
 
   const pyPath = path.join(__dirname, "ocr_once.py");
   const out = await new Promise((resolve, reject) => {
-    const PY = process.env.UNSTRUCT_PY
-      || (process.platform === "win32"
-          ? "C:\\Users\\user\\anaconda3\\envs\\unstruct\\python.exe"
-          : "python3");
+    const PY =
+      process.env.UNSTRUCT_PY ||
+      (process.platform === "win32"
+        ? "C:\\Users\\user\\anaconda3\\envs\\unstruct\\python.exe"
+        : "python3");
 
     const p = spawn(PY, [pyPath, tmpPath], {
       stdio: ["ignore", "pipe", "pipe"],
@@ -211,7 +218,8 @@ async function extractWithUnstructuredOnce(fileBuffer, filename) {
     p.stderr.on("data", (d) => (stderr += d.toString()));
     p.on("error", reject);
     p.on("close", (code) => {
-      if (code !== 0) return reject(new Error(`unstructured exit ${code}: ${stderr || stdout}`));
+      if (code !== 0)
+        return reject(new Error(`unstructured exit ${code}: ${stderr || stdout}`));
       resolve(stdout);
     });
   }).finally(async () => {
@@ -240,7 +248,9 @@ async function extractHwpx(buffer) {
     .sort();
 
   if (sectionEntries.length === 0) {
-    sectionEntries = Object.keys(zip.files).filter((n) => n.toLowerCase().endsWith(".xml"));
+    sectionEntries = Object.keys(zip.files).filter((n) =>
+      n.toLowerCase().endsWith(".xml")
+    );
   }
 
   const texts = [];
@@ -259,7 +269,8 @@ async function extractHwpx(buffer) {
     if (!node || typeof node !== "object") return;
     for (const k of Object.keys(node)) {
       const v = node[k];
-      if (/tbl$/i.test(k) && typeof v === "object") tables.push({ entry, type: "table" });
+      if (/tbl$/i.test(k) && typeof v === "object")
+        tables.push({ entry, type: "table" });
       if (Array.isArray(v)) v.forEach((x) => findTables(x, entry));
       else if (typeof v === "object") findTables(v, entry);
     }
@@ -267,7 +278,10 @@ async function extractHwpx(buffer) {
 
   for (const entry of sectionEntries) {
     const xmlStr = await zip.files[entry].async("string");
-    const xml = await parseStringPromise(xmlStr, { explicitArray: true, preserveChildrenOrder: true });
+    const xml = await parseStringPromise(xmlStr, {
+      explicitArray: true,
+      preserveChildrenOrder: true,
+    });
     crawl(xml);
     findTables(xml, entry);
   }
@@ -291,12 +305,15 @@ async function convertHwpToTxtViaCli(buffer, filename) {
 
   try {
     await new Promise((resolve, reject) => {
-      const p = spawn(HWP2TXT_EXE, [tmpIn, tmpOut], { stdio: ["ignore", "pipe", "pipe"] });
+      const p = spawn(HWP2TXT_EXE, [tmpIn, tmpOut], {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let stderr = "";
       p.stderr.on("data", (d) => (stderr += d.toString()));
       p.on("error", reject);
       p.on("close", (code) => {
-        if (code !== 0) return reject(new Error(`hwp2txt exit ${code}: ${stderr}`));
+        if (code !== 0)
+          return reject(new Error(`hwp2txt exit ${code}: ${stderr}`));
         resolve();
       });
     });
@@ -324,7 +341,9 @@ function toMarkdownTable(header, rows) {
   const lines = [
     `| ${header.join(" | ")} |`,
     `| ${sep.join(" | ")} |`,
-    ...rows.slice(0, 30).map((r) => `| ${r.map(sanitizeCell).join(" | ")} |`),
+    ...rows
+      .slice(0, 30)
+      .map((r) => `| ${r.map(sanitizeCell).join(" | ")} |`),
   ];
   return lines.join("\n");
 }
@@ -336,20 +355,30 @@ function normalizeTableMeta(t) {
     const dom = new JSDOM(html);
     const $rows = [...dom.window.document.querySelectorAll("tr")];
     const grid = $rows.map((tr) =>
-      [...tr.querySelectorAll("th,td")].map((td) => (td.textContent || "").trim())
+      [...tr.querySelectorAll("th,td")].map(
+        (td) => (td.textContent || "").trim()
+      )
     );
     header = grid[0] || [];
     rows = grid.slice(1);
   } else if (Array.isArray(t?.rows) || Array.isArray(t?.header)) {
     const arr = Array.isArray(t?.rows) ? t.rows : [];
-    header = Array.isArray(t?.header) ? t.header : (arr[0] || []).map((_, i) => `col_${i + 1}`);
+    header = Array.isArray(t?.header)
+      ? t.header
+      : (arr[0] || []).map((_, i) => `col_${i + 1}`);
     rows = arr.length ? arr : [];
   } else if (Array.isArray(t?.preview_rows)) {
-    const grid = t.preview_rows.map(r => (Array.isArray(r) ? r.map(sanitizeCell) : [sanitizeCell(String(r))]));
+    const grid = t.preview_rows.map((r) =>
+      Array.isArray(r)
+        ? r.map(sanitizeCell)
+        : [sanitizeCell(String(r))]
+    );
     header = grid[0] || [];
-    rows   = grid.slice(1);
-   }
-  const tsv = [header, ...rows].map((r) => r.map(sanitizeCell).join("\t")).join("\n");
+    rows = grid.slice(1);
+  }
+  const tsv = [header, ...rows]
+    .map((r) => r.map(sanitizeCell).join("\t"))
+    .join("\n");
   const md = toMarkdownTable(header, rows);
   const n_rows_hint = Number.isFinite(t?.n_rows) ? t.n_rows : undefined;
   const n_cols_hint = Number.isFinite(t?.n_cols) ? t.n_cols : undefined;
@@ -364,9 +393,11 @@ app.get("/health", (_, res) => {
     ok: true,
     emb_url: EMB_URL,
     llm_url: LLM_URL,
-    //vision_url: VISION_URL, // 🔒 비활성
+    // vision_url: VISION_URL, // 🔒 비활성
     storage: "local:/assets",
     always_unstructured: ALWAYS_UNSTRUCTURED,
+    render_pages: RENDER_PAGES,
+    max_table_rows_emb: MAX_TABLE_ROWS_EMB,
   });
 });
 
@@ -405,26 +436,44 @@ app.post("/upload", upload.single("file"), async (req, res) => {
         text = raw;
       }
 
-      // 페이지 이미지 렌더(그림/표 미리보기용) → 로컬 정적 저장
-      try {
-        const converter = await fromBuffer(fileBuffer, { format: "png", density: 180 });
-        const pages = await converter.bulk(-1, false);
-        for (const p of pages) {
-          const buf = p.buffer || Buffer.from((p.base64 || "").split(",")[1] || "", "base64");
-          if (!buf?.length) continue;
-          const storagePath = path.join(ASSET_DIR, saved.sha, "pages");
-          await fsp.mkdir(storagePath, { recursive: true });
-          const filename = `page-${String(p.page).padStart(4, "0")}.png`;
-          await fsp.writeFile(path.join(storagePath, filename), buf);
-          pageImageUrls.push(`${PUBLIC_BASE}/assets/doc-assets/${saved.sha}/pages/${filename}`);
+      // 페이지 이미지 렌더(그림/표 미리보기용) → 플래그로 제어
+      if (RENDER_PAGES) {
+        try {
+          const converter = await fromBuffer(fileBuffer, {
+            format: "png",
+            density: 180,
+          });
+          const pages = await converter.bulk(-1, false);
+          for (const p of pages) {
+            const buf =
+              p.buffer ||
+              Buffer.from(
+                (p.base64 || "").split(",")[1] || "",
+                "base64"
+              );
+            if (!buf?.length) continue;
+            const storagePath = path.join(ASSET_DIR, saved.sha, "pages");
+            await fsp.mkdir(storagePath, { recursive: true });
+            const filename = `page-${String(p.page).padStart(4, "0")}.png`;
+            await fsp.writeFile(path.join(storagePath, filename), buf);
+            pageImageUrls.push(
+              `${PUBLIC_BASE}/assets/doc-assets/${saved.sha}/pages/${filename}`
+            );
+          }
+        } catch (e) {
+          console.warn("⚠️ page image render failed:", e?.message || e);
         }
-      } catch (e) {
-        console.warn("⚠️ page image render skipped:", e?.message || e);
+      } else {
+        console.log("ℹ️ page image render skipped (RENDER_PAGES=false)");
       }
-    } else if (/\.(jpe?g|png|webp)$/i.test(filepath) || mimetype.startsWith("image/")) {
-      return res
-        .status(415)
-        .json({ error: "Image captioning disabled (vision off). Upload PDF/Office/Text/HWPX/HWP instead." });
+    } else if (
+      /\.(jpe?g|png|webp)$/i.test(filepath) ||
+      mimetype.startsWith("image/")
+    ) {
+      return res.status(415).json({
+        error:
+          "Image captioning disabled (vision off). Upload PDF/Office/Text/HWPX/HWP instead.",
+      });
     } else if (mimetype.includes("text") || /\.(txt|md)$/i.test(filepath)) {
       const encoding = chardet.detect(req.file.buffer) || "utf8";
       const decoded = iconv.decode(req.file.buffer, encoding);
@@ -441,7 +490,8 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       } catch (e) {
         return res.status(415).json({
           error: "HWP not supported on this server",
-          detail: "서버에 HWP 변환기가 구성되어 있지 않습니다. HWPX 또는 PDF/DOCX로 변환하여 업로드하세요.",
+          detail:
+            "서버에 HWP 변환기가 구성되어 있지 않습니다. HWPX 또는 PDF/DOCX로 변환하여 업로드하세요.",
         });
       }
     } else if (
@@ -451,11 +501,17 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       mimetype.includes("officedocument")
     ) {
       // Office 문서 → Unstructured 한 번 호출
-      const outJson = await extractWithUnstructuredOnce(req.file.buffer, filepath);
+      const outJson = await extractWithUnstructuredOnce(
+        req.file.buffer,
+        filepath
+      );
       text = cleanText(outJson.text || "");
       tablesForMeta = Array.isArray(outJson.tables) ? outJson.tables : [];
     } else {
-      return res.status(400).json({ error: "Unsupported file type (PDF/TXT/MD/PPT/DOC/DOCX/PPTX/HWPX/HWP only)" });
+      return res.status(400).json({
+        error:
+          "Unsupported file type (PDF/TXT/MD/PPT/DOC/DOCX/PPTX/HWPX/HWP only)",
+      });
     }
 
     if (!text) return res.status(400).json({ error: "empty text" });
@@ -465,13 +521,24 @@ app.post("/upload", upload.single("file"), async (req, res) => {
       if (tablesForMeta?.length) {
         for (let i = 0; i < tablesForMeta.length; i++) {
           const t = tablesForMeta[i];
-          const { header, rows, tsv, md, html, n_rows_hint, n_cols_hint } = normalizeTableMeta(t);
+          const {
+            header,
+            rows,
+            tsv,
+            md,
+            html,
+            n_rows_hint,
+            n_cols_hint,
+          } = normalizeTableMeta(t);
 
           // (1) 캡션 임베딩(너무 많은 페이지면 건너뜀)
           const pageNo = t?.page || 1;
           const caption = t?.caption || "Table";
-          const doCaptionEmb = pageNo <= MAX_CAPTION_PAGES && !!caption;
-          const captionEmb = doCaptionEmb ? await getEmbedding(caption, "passage") : null;
+          const doCaptionEmb =
+            pageNo <= MAX_CAPTION_PAGES && !!caption;
+          const captionEmb = doCaptionEmb
+            ? await getEmbedding(caption, "passage")
+            : null;
 
           // (2) 자산 생성 (table)
           const assetId = await insertDocAsset({
@@ -489,41 +556,63 @@ app.post("/upload", upload.single("file"), async (req, res) => {
           await insertDocTable({
             asset_id: assetId,
             n_rows: n_rows_hint ?? rows.length,
-            n_cols: n_cols_hint ?? (header.length || (rows[0]?.length || 0)),
+            n_cols:
+              n_cols_hint ??
+              (header.length || (rows[0]?.length || 0)),
             tsv,
             md,
             html: html || null,
           });
 
           // (4) 행(Row) → 문서(document) + 임베딩 (상한 적용)
-          const limitRows = Math.min(rows.length, MAX_TABLE_ROWS_EMB);
-          for (let rIdx = 0; rIdx < limitRows; rIdx++) {
-            const row = rows[rIdx] || [];
-            const sentence = rowToSentence(caption, header, row);
-            const rowEmb = await getEmbedding(sentence, "passage");
+          if (MAX_TABLE_ROWS_EMB > 0) {
+            const limitRows = Math.min(
+              rows.length,
+              MAX_TABLE_ROWS_EMB
+            );
+            for (let rIdx = 0; rIdx < limitRows; rIdx++) {
+              const row = rows[rIdx] || [];
+              const sentence = rowToSentence(
+                caption,
+                header,
+                row
+              );
+              const rowEmb = await getEmbedding(
+                sentence,
+                "passage"
+              );
 
-            // 숫자 필드 정규화(옵션)
-            const normalized = {};
-            header.forEach((h, colIdx) => {
-              const n = normalizeNumber(row[colIdx]);
-              if (n && (n.value != null || n.unit || n.raw)) normalized[h] = n;
-            });
+              // 숫자 필드 정규화(옵션)
+              const normalized = {};
+              header.forEach((h, colIdx) => {
+                const n = normalizeNumber(row[colIdx]);
+                if (
+                  n &&
+                  (n.value != null || n.unit || n.raw)
+                )
+                  normalized[h] = n;
+              });
 
-            const metadata = {
-              type: "table_row",
-              asset_id: assetId,
-              row_index: rIdx,
-              headers: header,
-              normalized,
-              source: filepath,
-              stored_path: saved.relPath,
-              sha256: saved.sha,
-              page: pageNo,
-              caption,
-              mimetype,
-            };
+              const metadata = {
+                type: "table_row",
+                asset_id: assetId,
+                row_index: rIdx,
+                headers: header,
+                normalized,
+                source: filepath,
+                stored_path: saved.relPath,
+                sha256: saved.sha,
+                page: pageNo,
+                caption,
+                mimetype,
+              };
 
-            await insertDocumentWithEmbedding(sentence, metadata, rowEmb);
+              await insertDocumentWithEmbedding(
+                sentence,
+                metadata,
+                rowEmb
+              );
+            }
           }
         }
       }
@@ -542,18 +631,27 @@ app.post("/upload", upload.single("file"), async (req, res) => {
           const embRes = await fetch(`${EMB_URL}/embed`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ input: c.text, mode: "passage" }),
+            body: JSON.stringify({
+              input: c.text,
+              mode: "passage",
+            }),
           });
-          if (!embRes.ok) throw new Error(`embedding failed ${embRes.status}`);
+          if (!embRes.ok)
+            throw new Error(`embedding failed ${embRes.status}`);
           const embJson = await embRes.json();
           const vector = Array.isArray(embJson.embedding)
             ? embJson.embedding
-            : (embJson.data && embJson.data[0] && Array.isArray(embJson.data[0].embedding))
+            : (embJson.data &&
+                embJson.data[0] &&
+                Array.isArray(
+                  embJson.data[0].embedding
+                ))
             ? embJson.data[0].embedding
             : Array.isArray(embJson.data)
             ? embJson.data
             : null;
-          if (!Array.isArray(vector)) throw new Error("invalid embedding payload");
+          if (!Array.isArray(vector))
+            throw new Error("invalid embedding payload");
 
           const metadata = {
             filepath,
@@ -573,10 +671,21 @@ app.post("/upload", upload.single("file"), async (req, res) => {
               : /\.(txt|md)$/i.test(filepath)
               ? "text"
               : "pdf",
-            ...(idx === 0 ? { assets: { pages: pageImageUrls, tables: tablesForMeta } } : {}),
+            ...(idx === 0
+              ? {
+                  assets: {
+                    pages: pageImageUrls,
+                    tables: tablesForMeta,
+                  },
+                }
+              : {}),
           };
 
-          await insertDocumentWithEmbedding(c.text, metadata, vector);
+          await insertDocumentWithEmbedding(
+            c.text,
+            metadata,
+            vector
+          );
           inserted++;
         })
       )
@@ -592,7 +701,9 @@ app.post("/upload", upload.single("file"), async (req, res) => {
     });
   } catch (e) {
     console.error("/upload error:", e);
-    res.status(500).json({ error: e?.message || "server error" });
+    res
+      .status(500)
+      .json({ error: e?.message || "server error" });
   }
 });
 
@@ -603,7 +714,10 @@ function withTimeout(promise, ms = 30000, tag = "req") {
   return Promise.race([
     promise,
     new Promise((_, rej) =>
-      setTimeout(() => rej(new Error(`${tag} timeout ${ms}ms`)), ms)
+      setTimeout(
+        () => rej(new Error(`${tag} timeout ${ms}ms`)),
+        ms
+      )
     ),
   ]);
 }
@@ -638,7 +752,7 @@ async function classifyQuestionMode(question) {
   const CLASSIFIER_SYSTEM = `
 당신은 사용자의 질문이 어떤 종류인지 분류하는 조교입니다.
 
-- "general": LLM 일반 지식, 기술 용어(예: LLM, RAG, 임베딩, 벡터DB, Transformer 등)의 뜻/개념/원리를 설명해 달라는 질문
+- "general": 일반 지식을 설명해 달라는 질문
 - "document": 업로드된 문서 내용(논문, 보고서 등)에 기반해 답해야 하는 질문
   (예: "이 논문에서 RAG는 무엇을 의미하나요?", "p.23 표 해석해줘")
 
@@ -652,7 +766,7 @@ document
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "text/event-stream",
+        Accept: "text/event-stream",
       },
       body: JSON.stringify({
         context: "",
@@ -686,12 +800,18 @@ document
 // =========================
 // 일반 지식 모드: LLM으로만 답변 (출처 없음)
 // =========================
-async function answerWithGeneralKnowledge({ question, history, max_new_tokens, temperature, top_p }) {
+async function answerWithGeneralKnowledge({
+  question,
+  history,
+  max_new_tokens,
+  temperature,
+  top_p,
+}) {
   const GENERAL_SYSTEM = `
-당신은 인공지능, 머신러닝, 소프트웨어 공학, 수학 등 일반 기술 지식을 설명하는 조교입니다.
+당신은 일반 지식을 설명하는 조교입니다.
 
 - 말투: 한국어 존댓말, 간결하고 단계적으로 설명합니다.
-- LLM, RAG(검색 증강 생성), 임베딩, 벡터DB, Transformer, CUDA, WebSocket 등은 일반 지식으로 자유롭게 설명하십시오.
+- 일반 지식으로 자유롭게 설명하십시오.
 - 1) 한 줄 정의, 2) 2~4줄 정도의 부연 설명으로 구성하되, 필요 이상으로 길게 설명하지 마십시오.
 - 업로드된 문서(CONTEXT)는 사용하지 않으며, 출처 목록도 적지 마십시오.
 `.trim();
@@ -701,14 +821,17 @@ async function answerWithGeneralKnowledge({ question, history, max_new_tokens, t
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "text/event-stream",
+        Accept: "text/event-stream",
       },
       body: JSON.stringify({
         context: "",
         question,
         history,
         system: GENERAL_SYSTEM,
-        max_new_tokens: Math.min(Math.max(96, max_new_tokens || 384), 256),
+        max_new_tokens: Math.min(
+          Math.max(96, max_new_tokens || 384),
+          256
+        ),
         temperature: Math.max(0.15, temperature || 0.2),
         top_p: top_p ?? 0.9,
       }),
@@ -744,10 +867,14 @@ async function handleQueryJSON(req, res) {
     } = req.body || {};
 
     if (!question) {
-      return res.status(400).json({ ok: false, error: "question required" });
+      return res
+        .status(400)
+        .json({ ok: false, error: "question required" });
     }
     if (String(question).length > 8000) {
-      return res.status(413).json({ ok: false, error: "question too long" });
+      return res
+        .status(413)
+        .json({ ok: false, error: "question too long" });
     }
 
     // 최근 문맥 50턴 제한
@@ -773,14 +900,17 @@ async function handleQueryJSON(req, res) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Accept": "text/event-stream",
+            Accept: "text/event-stream",
           },
           body: JSON.stringify({
             context: "",
             question,
             history,
             system: SMALLTALK_SYSTEM,
-            max_new_tokens: Math.min(Math.max(48, max_new_tokens), 160),
+            max_new_tokens: Math.min(
+              Math.max(48, max_new_tokens),
+              160
+            ),
             temperature: Math.max(0.3, temperature || 0.3),
             top_p,
           }),
@@ -816,9 +946,14 @@ async function handleQueryJSON(req, res) {
     }
     const embJson = await embRes.json();
     const qVec =
-      (embJson && Array.isArray(embJson.embedding)) ? embJson.embedding :
-      (embJson?.data?.[0]?.embedding && Array.isArray(embJson.data[0].embedding)) ? embJson.data[0].embedding :
-      (Array.isArray(embJson.data) ? embJson.data : null);
+      embJson && Array.isArray(embJson.embedding)
+        ? embJson.embedding
+        : (embJson?.data?.[0]?.embedding &&
+            Array.isArray(embJson.data[0].embedding))
+        ? embJson.data[0].embedding
+        : Array.isArray(embJson.data)
+        ? embJson.data
+        : null;
     if (!Array.isArray(qVec)) {
       throw new Error("invalid embedding payload for question");
     }
@@ -829,12 +964,15 @@ async function handleQueryJSON(req, res) {
     const BASE_ANSWER_THRESHOLD = 0.6;
     let answerThreshold = BASE_ANSWER_THRESHOLD;
 
-    const wordCount = question.trim().split(/\s+/).filter(Boolean).length;
+    const wordCount = question
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean).length;
 
     if (wordCount <= 3) {
-      answerThreshold -= 0.03;   // 0.57
+      answerThreshold -= 0.03; // 0.57
     } else if (wordCount <= 7) {
-      answerThreshold -= 0.02;   // 0.58
+      answerThreshold -= 0.02; // 0.58
     }
 
     if (answerThreshold < 0.55) answerThreshold = 0.55;
@@ -850,7 +988,39 @@ async function handleQueryJSON(req, res) {
     const NOT_FOUND_MSG = "모릅니다.";
 
     // =========================
-    // 2. 문서 매치가 충분히 좋으면 → RAG 답변
+    // 2. 질문 타입 먼저 분류 (general vs document)
+    // =========================
+    let mode = "document";
+    try {
+      mode = await classifyQuestionMode(question); // "general" | "document"
+    } catch (e) {
+      console.warn(
+        "⚠️ classifyQuestionMode failed, fallback to document:",
+        e?.message || e
+      );
+      mode = "document";
+    }
+
+    // 2-1) 일반 지식 질문이면 → RAG 무시하고 LLM 일반 모드로만 답변
+    if (mode === "general") {
+      const generalAnswer = await answerWithGeneralKnowledge({
+        question,
+        history,
+        max_new_tokens,
+        temperature,
+        top_p,
+      });
+
+      return res.json({
+        ok: true,
+        mode: "json",
+        sources: [],
+        answer: generalAnswer,
+      });
+    }
+
+    // =========================
+    // 3. 문서 질문인 경우에만 RAG 사용
     // =========================
     if (maxSim >= answerThreshold) {
       const MAX_TOKENS = 1400;
@@ -859,13 +1029,19 @@ async function handleQueryJSON(req, res) {
       const srcPayloadRaw = [];
 
       for (const m of matches) {
-        const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : (m.metadata || {});
+        const meta =
+          typeof m.metadata === "string"
+            ? JSON.parse(m.metadata)
+            : m.metadata || {};
         const rawPath = meta.filepath || meta.source || "";
         const filename = rawPath ? rawPath.split(/[\\/]/).pop() : "";
 
         let t = (m.content || "").trim();
         if (t.length > 1400) {
-          t = t.slice(0, 700) + "\n...\n" + t.slice(-700);
+          t =
+            t.slice(0, 700) +
+            "\n...\n" +
+            t.slice(-700);
         }
 
         const est = Math.ceil(t.length / 3.5);
@@ -876,23 +1052,29 @@ async function handleQueryJSON(req, res) {
         ctxParts.push(`【source:${labelForCtx}】\n${t}`);
 
         srcPayloadRaw.push({
-          key: `${meta.doc_id || m.id || ""}|${rawPath}|${meta.page ?? ""}`,
-          label: meta.chunk_index != null
-            ? `chunk${meta.chunk_index}`
-            : (m.id ? `id:${m.id}` : "chunk"),
+          key: `${meta.doc_id || m.id || ""}|${rawPath}|${
+            meta.page ?? ""
+          }`,
+          label:
+            meta.chunk_index != null
+              ? `chunk${meta.chunk_index}`
+              : m.id
+              ? `id:${m.id}`
+              : "chunk",
           filepath: rawPath,
           filename,
           page: meta.page,
-          similarity: Math.round((m.similarity ?? 0) * 1000) / 1000,
+          similarity:
+            Math.round((m.similarity ?? 0) * 1000) / 1000,
         });
       }
 
-      // 출처 리스트 구성
-      const seen = new Set();
       const sources = [];
+      const seen = new Set();
       let sourceIdx = 1;
       for (const s of srcPayloadRaw) {
-        const idKey = s.key || `${s.filepath}|${s.page || ""}`;
+        const idKey =
+          s.key || `${s.filepath}|${s.page || ""}`;
         if (!idKey) continue;
         if (seen.has(idKey)) continue;
         seen.add(idKey);
@@ -900,7 +1082,7 @@ async function handleQueryJSON(req, res) {
         const displayName =
           s.filename && s.filename.trim()
             ? s.filename
-            : (s.filepath && s.filepath.trim())
+            : s.filepath && s.filepath.trim()
             ? s.filepath
             : `문서${sourceIdx}`;
 
@@ -918,7 +1100,9 @@ async function handleQueryJSON(req, res) {
       const sourcesList =
         sources.length > 0
           ? "\n\n---\n출처 목록:\n" +
-            sources.map((s) => `【source:${s.filename}】`).join(" ")
+            sources
+              .map((s) => `【source:${s.filename}】`)
+              .join(" ")
           : "";
       const context = ctxParts.join("\n\n---\n\n") + sourcesList;
 
@@ -930,7 +1114,7 @@ async function handleQueryJSON(req, res) {
 - 답변 본문에 "근거:" 같은 꼬리표를 붙이지 마십시오.
 - 답변의 마지막에만 아래 형식으로 출처를 명시하십시오:
   ---
-  출처: 【source:파일명1】 【source:파일명2】 (가능하면 최대 3개)
+  출처: 【source:파일명1】 【source:파일명2】 
 - 답변은 500자 이내로 간결하게 대답하십시오:
 - CONTEXT가 부족하거나 관련이 없으면 아래 문장만 답하십시오:
   "모릅니다."
@@ -941,14 +1125,17 @@ async function handleQueryJSON(req, res) {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Accept": "text/event-stream",
+            Accept: "text/event-stream",
           },
           body: JSON.stringify({
             context,
             question,
             history,
             system: STRICT_SYSTEM_KO,
-            max_new_tokens: Math.max(128, Math.min(max_new_tokens, 1024)),
+            max_new_tokens: Math.max(
+              128,
+              Math.min(max_new_tokens, 1024)
+            ),
             temperature,
             top_p,
           }),
@@ -977,47 +1164,18 @@ async function handleQueryJSON(req, res) {
       });
     }
 
-    // =========================
-    // 3. 문서 매치가 약한 경우 → 분류 후 fallback
-    // =========================
-    let mode = "document";
-    try {
-      mode = await classifyQuestionMode(question); // "general" | "document"
-    } catch (e) {
-      console.warn("⚠️ classifyQuestionMode failed, fallback to document:", e?.message || e);
-      mode = "document";
-    }
-
-    if (mode === "document") {
-      // 문서에서 찾고 싶은 질문인데, 근거가 없음 → 모른다 (출처 없음)
-      return res.json({
-        ok: true,
-        mode: "json",
-        sources: [],
-        answer: NOT_FOUND_MSG,
-      });
-    }
-
-    // mode === "general" → 일반 기술 지식 모드 (LLM 지식, 출처 없음)
-    const generalAnswer = await answerWithGeneralKnowledge({
-      question,
-      history,
-      max_new_tokens,
-      temperature,
-      top_p,
-    });
-
     return res.json({
       ok: true,
       mode: "json",
       sources: [],
-      answer: generalAnswer,
+      answer: NOT_FOUND_MSG,
     });
-
   } catch (e) {
     console.error("🔥 /query error:", e);
     if (!res.headersSent) {
-      return res.status(500).json({ ok: false, error: e?.message || "query failed" });
+      return res
+        .status(500)
+        .json({ ok: false, error: e?.message || "query failed" });
     }
   }
 }
@@ -1029,18 +1187,31 @@ app.post("/query", handleQueryJSON);
 
 app.get("/query/:question", (req, res) => {
   const q = decodeURIComponent(req.params.question || "");
-  req.body = { question: q, history: [], match_count: 5, threshold: 0.6, strict: true };
+  req.body = {
+    question: q,
+    history: [],
+    match_count: 5,
+    threshold: 0.6,
+    strict: true,
+  };
   return handleQueryJSON(req, res);
 });
 
-
 // =========================
-/** 서버 시작 */
+// 서버 시작
 // =========================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`✅ Server running on http://0.0.0.0:${PORT}`);
   console.log(`   - EMB_URL = ${EMB_URL}`);
   console.log(`   - LLM_URL = ${LLM_URL}`);
-  //console.log(`   - VISION_URL = ${VISION_URL}`); // 🔒 비활성
-  if (HWP2TXT_EXE) console.log(`   - HWP2TXT_EXE = ${HWP2TXT_EXE}`);
+  // console.log(`   - VISION_URL = ${VISION_URL}`); // 🔒 비활성
+  console.log(
+    `   - ALWAYS_UNSTRUCTURED = ${ALWAYS_UNSTRUCTURED}`
+  );
+  console.log(`   - RENDER_PAGES = ${RENDER_PAGES}`);
+  console.log(
+    `   - MAX_TABLE_ROWS_EMB = ${MAX_TABLE_ROWS_EMB}`
+  );
+  if (HWP2TXT_EXE)
+    console.log(`   - HWP2TXT_EXE = ${HWP2TXT_EXE}`);
 });
