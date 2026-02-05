@@ -1,4 +1,16 @@
 services:
+  mysql:
+    image: mysql:8.0
+    container_name: vfims-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      - MYSQL_ROOT_PASSWORD=vfims123
+      - MYSQL_DATABASE=vfims
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
   backend:
     build:
       context: .
@@ -8,9 +20,10 @@ services:
       - "8000:8000"
     environment:
       - PORT=8000
-      - DB_HOST=host.docker.internal
-      - EMB_URL=http://embedding:8001
-      - LLM_URL=http://llm:8002
+      - MY_HOST=host.docker.internal
+      - MY_PORT=3306
+      - EMB_URL=http://host.docker.internal:8001
+      - LLM_URL=http://host.docker.internal:8002
     volumes:
       - ./uploads:/app/server/uploads
       - ./.env:/app/.env
@@ -23,13 +36,13 @@ services:
   embedding:
     image: vllm/vllm-openai:latest
     container_name: vfims-embedding
-    runtime: nvidia  # 이 줄 추가
     ports:
       - "8001:8001"
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all  # 이 줄 추가
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     command: >
       --model BAAI/bge-m3
       --host 0.0.0.0
@@ -45,17 +58,17 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
-              
+
   llm:
     image: vllm/vllm-openai:latest
     container_name: vfims-llm
-    runtime: nvidia  # 이 줄 추가
     ports:
       - "8002:8002"
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all  # 이 줄 추가
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     command: >
       --model QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
       --served-model-name qwen-coder
@@ -74,3 +87,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+
+volumes:
+  mysql_data:

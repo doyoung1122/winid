@@ -1,17 +1,16 @@
 {
-  "name": "backend",
-  "version": "1.0.0",
-  "type": "commonjs",
-  "main": "dist/server.js",
+  "name": "vfims-backend",
+  "version": "2.0.0",
+  "type": "module",
+  "main": "src/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only -r dotenv/config src/server.ts",
-    "build": "tsc -p tsconfig.json",
-    "start": "node dist/server.js"
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "mcp": "node src/mcp/server.js"
   },
   "dependencies": {
-    "@stomp/stompjs": "^7.2.1",
-    "@supabase/supabase-js": "^2.58.0",
-    "abort-controller": "^3.0.0",
+    "@langchain/core": "^0.3.0",
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "chardet": "^2.1.0",
     "cors": "^2.8.5",
     "dotenv": "^16.6.1",
@@ -19,30 +18,19 @@
     "gpt-tokenizer": "^3.0.1",
     "iconv-lite": "^0.7.0",
     "jsdom": "^27.0.1",
-    "morgan": "^1.10.1",
+    "jszip": "^3.10.1",
     "multer": "^1.4.5-lts.1",
-    "node-fetch": "^2.7.0",
-    "npm-fetch": "^0.0.9",
-    "p-limit": "^3.1.0",
+    "mysql2": "^3.16.2",
     "pdf-parse": "^1.1.1",
     "pdf2pic": "^3.2.0",
-    "sockjs-client": "^1.6.1",
-    "stompjs": "^2.3.3",
-    "ws": "^8.18.3"
+    "xml2js": "^0.6.2",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.3",
-    "@types/morgan": "^1.9.10",
-    "@types/multer": "^2.0.0",
-    "@types/node": "^24.5.2",
-    "nodemon": "^3.1.10",
-    "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
-    "typescript": "^5.9.2"
+    "nodemon": "^3.1.10"
   },
-  "description": "",
-  "keywords": [],
+  "description": "VFIMS Fire Investigation RAG Backend with MCP",
+  "keywords": ["fire-investigation", "rag", "mcp"],
   "author": "",
   "license": "ISC"
 }

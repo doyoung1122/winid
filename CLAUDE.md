@@ -2,73 +2,169 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Project Context: Fire Investigation Knowledge Augmented System (RAG)
+
+### Project Goal
+Build a system that provides fire incident statistics and reports to an LLM via the MCP protocol. The system uses a **Hybrid Database Architecture** to combine structured metadata with semantic vector search.
+
+### Key Architecture Rules (MUST FOLLOW)
+
+1. **Hybrid Database Pattern:**
+   - **Do NOT** store high-dimensional vectors in MySQL.
+   - **Do NOT** store rich metadata in ChromaDB (keep it minimal).
+   - Use `doc_id` as the foreign key to link MySQL records with ChromaDB vectors.
+   - **Transaction Logic:** 1. Save Metadata (MySQL) → 2. Save Vector (ChromaDB) → 3. Commit.
+
+2. **Textification Strategy (Crucial):**
+   - Raw tabular data (e.g., JSON statistics) must be converted into **Natural Language Sentences** before embedding.
+   - *Bad:* `{"date": "2024-01-01", "station": "종로소방서", "count": 3}`
+   - *Good:* "2024년 1월 1일, 종로소방서에서 화재 3건이 발생했습니다."
+   - **Why:** To improve semantic search accuracy for LLMs.
+
+3. **Infrastructure:**
+   - All services must be defined in `docker-compose.yml`.
+   - Ensure all containers share the `vfims_net` network.
+
+---
+
 ## Project Overview
 
-A RAG (Retrieval-Augmented Generation) system for enterprise document analysis. Users upload documents (PDF, TXT, DOCX, PPT, HWP), which are parsed, chunked, embedded, and stored. Questions are answered by retrieving relevant chunks via vector similarity and generating responses with an LLM. The project is Korean-language optimized (ko_KR UTF-8).
+A RAG (Retrieval-Augmented Generation) system specialized for **Fire Investigation**. Users upload documents (PDF, HWP) or fetch API statistics, which are parsed, textified, chunked, embedded, and stored in a Hybrid DB. Questions are answered by retrieving relevant chunks via ChromaDB and generating responses with an LLM via **MCP (Model Context Protocol)**.
 
 ## Architecture
 
-Three-service architecture orchestrated via `docker-compose.yml`:
+Services orchestrated via `docker-compose.yml`:
 
-- **Backend** (`server/`, port 8000) — Node.js/Express. Handles file uploads, document parsing (invokes Python Docling as subprocess), text chunking, embedding requests, vector search, and RAG query orchestration. Plain JavaScript (CommonJS). Key files: `index.js` (main server ~992 lines), `chunk.js` (token-based splitter), `rag_langchain.js` (LangChain RAG chain with intent classification).
-- **Embedding service** (port 8001) — vLLM serving BAAI/bge-m3 (1024-dim vectors, max 8192 tokens). OpenAI-compatible API.
-- **LLM service** (port 8002) — vLLM serving Qwen3-Coder-30B-A3B (AWQ quantized, max 12288 tokens). OpenAI-compatible API. Served model name: `qwen-coder`.
-- **Frontend** (`web/`, Vite dev server) — React 19 + TypeScript + Tailwind CSS 4. **테스트용이므로 우선순위 낮음.** Components: `UploadBox.tsx` (drag-drop file upload), `ChatView.tsx` (multi-turn conversation with streaming).
-- **Database** — MySQL (mysql2/promise, charset utf8mb4). Connection config in root `.env`. Vector embeddings stored as JSON arrays and cached in-memory as Float32Array for fast dot-product search (`db/repo.js`).
-- **MCP Server** (`mcp_server/`) — Model Context Protocol server using `@modelcontextprotocol/sdk`.
+| Service | Port | Description |
+|---------|------|-------------|
+| **Backend / MCP Server** | 8000 | Node.js/Express. File uploads, Docling OCR, Textification, MCP SDK integration |
+| **MySQL 8.0** | 3306 | Metadata, structured stats, file info, vector embeddings |
+| **Embedding (vLLM)** | 8001 | BAAI/bge-m3 (1024-dim vectors, max 8192 tokens) |
+| **LLM (vLLM)** | 8002 | Qwen3-Coder-30B-A3B (max 12288 tokens) |
+| **Frontend** | 5173 | React 19 + TypeScript (Low priority) |
+
+### Project Structure (ESM)
+
+```
+server/
+├── package.json              # "type": "module"
+├── chunk.js                  # Token-based chunking
+├── ocr_once.py              # Docling OCR script
+├── src/
+│   ├── index.js              # Express entry point
+│   ├── config/
+│   │   └── env.js            # Environment variables
+│   ├── services/
+│   │   ├── llm.service.js    # LLM calls (vLLM)
+│   │   ├── embedding.service.js  # Embedding calls
+│   │   └── vector.service.js # Vector search
+│   ├── routes/
+│   │   ├── upload.route.js
+│   │   ├── query.route.js
+│   │   └── health.route.js
+│   ├── handlers/
+│   │   ├── upload.handler.js
+│   │   └── query.handler.js
+│   ├── rag/
+│   │   ├── chain.js          # LangChain RAG pipeline
+│   │   ├── prompts.js        # System prompts
+│   │   └── intent.js         # Intent classification
+│   ├── mcp/
+│   │   ├── server.js         # MCP server (stdio)
+│   │   └── tools/
+│   │       ├── ask-fire-expert.tool.js
+│   │       ├── textify-data.tool.js
+│   │       ├── get-embedding.tool.js
+│   │       └── health-check.tool.js
+│   └── utils/
+│       ├── text.util.js
+│       ├── file.util.js
+│       └── table.util.js
+└── db/
+    ├── mysql.js              # MySQL connection pool
+    └── repo.js               # Document/embedding repository
+```
 
 ### Data Flow
 
-Upload: File → SHA256 dedup → Docling OCR extraction (markdown + tables + images) → token-based chunking (1200 tokens, 200 overlap) → batch embedding via bge-m3 → MySQL insert + in-memory vector cache load.
+```
+1. Ingest    → File Upload OR API Fetch (Fire Stats)
+2. Process   → Files: SHA256 dedup → Docling OCR
+             → Stats: Textification (JSON → 자연어 문장)
+3. Chunk     → Token-based (500-1200 tokens)
+4. Embed     → Batch embedding via bge-m3
+5. Store     → MySQL (metadata + vectors in-memory cache)
+```
 
-Query: Question → query embedding → in-memory cosine similarity search (threshold 0.35–0.75, top-K) → LangChain RAG chain (intent classification → context formatting) → LLM generation → streamed response with source attribution.
+### Database Schema
 
-### Database Tables
+**MySQL:**
+- `documents` - id, content, metadata (JSON)
+- `embeddings` - document_id, embedding (JSON array)
+- `doc_assets` - sha256, filepath, page, type, image_url, caption
+- `doc_tables` - asset_id, n_rows, n_cols, tsv, md, html
 
-`documents` (content, metadata), `embeddings` (document_id, L2-normalized 1024-dim JSON vectors), `doc_assets` (images/tables with caption embeddings), `doc_tables` (TSV/MD/HTML table formats).
+---
 
 ## Common Commands
 
-### Frontend (web/)
+### Backend & MCP
 ```bash
-cd web && npm install          # install dependencies
-cd web && npm run dev          # dev server (Vite)
-cd web && npm run build        # production build (tsc + vite build)
-cd web && npm run lint         # ESLint
+cd server && npm install      # install dependencies
+npm start                     # run backend server (node src/index.js)
+npm run dev                   # run with --watch for development
+npm run mcp                   # run MCP server standalone
 ```
 
-### Backend (server/)
+### Docker (Full Stack)
 ```bash
-cd server && npm install       # install dependencies
-node server/index.js           # run server (reads server/.env)
+docker compose up -d              # start all services
+docker compose up -d --build      # rebuild and start
+docker compose down               # stop services
+docker compose logs -f backend    # view backend logs
 ```
 
-Note: `server/package.json` has TS scripts (`npm run dev`, `npm run build`) but the actual source is plain JS — use `node index.js` directly.
-
-### Docker (full stack)
+### Python Utilities
 ```bash
-docker compose up --build      # start backend + embedding + llm services
+python server/ocr_once.py         # standalone Docling OCR
 ```
-Requires NVIDIA GPU with docker GPU support. Embedding uses ~5% GPU memory, LLM uses ~85%.
 
-### Python utilities
-```bash
-python server/ocr_once.py      # standalone Docling document extraction
-python inference_chat_cli.py   # CLI chat with local Llama model + LoRA
-```
+---
 
 ## Environment Configuration
 
-- **Root `.env`** — MySQL connection: `MY_HOST`, `MY_PORT`, `MY_USER`, `MY_PASS`, `MY_DB`
-- **`server/.env`** — Service URLs (`EMB_URL`, `LLM_URL`), chunking params (`CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS`, `MAX_CHUNKS_EMB`), table/OCR settings (`ENABLE_TABLE_INDEX`, `PDF_INFER_TABLES`, `MAX_TABLE_ROWS_EMB`)
-- **`web/.env`** — `VITE_API_URL` (default `http://localhost:8000`)
-- **`docker-compose.yml`** — overrides service URLs for container networking
+All environment variables are centralized in `server/src/config/env.js`:
+
+| Category | Variables |
+|----------|-----------|
+| **Server** | `PORT`, `ALLOWED_ORIGINS` |
+| **Services** | `EMB_URL`, `LLM_URL`, `LLM_MODEL`, `EMB_MODEL` |
+| **MySQL** | `MY_HOST`, `MY_PORT`, `MY_USER`, `MY_PASS`, `MY_DB` |
+| **Processing** | `CHUNK_SIZE_TOKENS`, `CHUNK_OVERLAP_TOKENS`, `MAX_CHUNKS_EMB` |
+| **Features** | `FAST_MODE`, `RENDER_PAGES`, `ENABLE_TABLE_INDEX` |
+| **RAG Thresholds** | `RETRIEVE_MIN`, `USE_AS_CTX_MIN`, `MIN_TOP3_AVG` |
+
+---
 
 ## Key Implementation Details
 
-- Vector search is in-memory (not a vector DB). `db/repo.js` loads all embeddings into Float32Array cache on startup, computes L2-normalized dot products for cosine similarity.
-- Document parsing uses Python Docling invoked as a child process from Node.js — not a separate service.
-- File upload limit is 100MB (Multer config). SHA256 is used for duplicate detection.
-- Token counting uses `gpt-tokenizer` for accurate chunk boundaries.
-- The LLM is accessed via vLLM's OpenAI-compatible API (not HuggingFace transformers directly).
-- Concurrency is controlled with `p-limit` for batch embedding requests.
+- **ESM Modules:** All JavaScript files use ES modules (`import`/`export`).
+- **Vector Search:** In-memory cache in `db/repo.js` for fast similarity search.
+- **Document Parsing:** Python Docling invoked as child process from Node.js.
+- **Textification:** Statistics MUST be converted to Korean natural language before embedding.
+- **Concurrency:** Custom limiter for batch embedding requests.
+- **Language:** Optimized for Korean (ko_KR.UTF-8).
+- **MCP Integration:** `@modelcontextprotocol/sdk` for Claude/Gemini connection.
+
+### MCP Tools Available
+
+| Tool | Description |
+|------|-------------|
+| `ask_fire_expert` | Query the fire investigation expert |
+| `textify_data` | Convert JSON to natural language |
+| `get_embedding` | Get embedding vector for text |
+| `health_check` | Check LLM/Embedding service status |
+
+### Claude Desktop Configuration
+
+Copy `server/claude_desktop_config.example.json` to `~/.config/claude_desktop/config.json` and adjust paths/credentials.

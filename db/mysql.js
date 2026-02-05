@@ -1,15 +1,12 @@
-const mysql = require("mysql2/promise");
-const dotenv = require("dotenv");
-const path = require("path");
-
-dotenv.config({ path: path.join(__dirname, "..", ".env") });
+import mysql from "mysql2/promise";
+import { MY_HOST, MY_PORT, MY_USER, MY_PASS, MY_DB } from "../server/src/config/env.js";
 
 const pool = mysql.createPool({
-  host: process.env.MY_HOST,
-  port: Number(process.env.MY_PORT),
-  user: process.env.MY_USER,
-  password: process.env.MY_PASS,
-  database: process.env.MY_DB,
+  host: MY_HOST,
+  port: MY_PORT,
+  user: MY_USER,
+  password: MY_PASS,
+  database: MY_DB,
   charset: "utf8mb4",
   waitForConnections: true,
   connectionLimit: 10,
@@ -21,4 +18,4 @@ async function getConn() {
   return pool.getConnection();
 }
 
-module.exports = { pool, getConn };
+export { pool, getConn };

@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "vfims-fire-investigation": {
+      "command": "node",
+      "args": ["/home/winidsoft/vfims_llm/server/src/mcp/server.js"],
+      "env": {
+        "LLM_URL": "http://127.0.0.1:8002",
+        "EMB_URL": "http://127.0.0.1:8001",
+        "LLM_MODEL": "qwen-coder",
+        "EMB_MODEL": "BAAI/bge-m3",
+        "MY_HOST": "localhost",
+        "MY_PORT": "3306",
+        "MY_USER": "root",
+        "MY_PASS": "",
+        "MY_DB": "vfims"
+      }
+    }
+  }
+}
