@@ -1,4 +1,4 @@
-const { encode } = require("gpt-tokenizer");
+const { encode, decode} = require("gpt-tokenizer");
 
 /**
  * 텍스트를 토큰 단위로 나눠서 chunk 리스트 반환
@@ -7,7 +7,12 @@ const { encode } = require("gpt-tokenizer");
  * @param {number} overlap 청크 간 겹치는 토큰 수
  * @returns {Array<{ text: string, startTok: number, endTok: number }>}
  */
+
 function chunkTextTokens(text, maxTokens = 800, overlap = 100) {
+  if (overlap >= maxTokens) {
+    throw new Error(`overlap(${overlap}) must be < maxTokens(${maxTokens})`);
+  }
+
   const tokens = encode(text);
   const chunks = [];
 
@@ -15,12 +20,14 @@ function chunkTextTokens(text, maxTokens = 800, overlap = 100) {
   while (start < tokens.length) {
     const end = Math.min(start + maxTokens, tokens.length);
     const chunkTokens = tokens.slice(start, end);
-    const chunkText = decodeTokens(chunkTokens);
-    chunks.push({
-      text: chunkText,
-      startTok: start,
-      endTok: end,
-    });
+    const chunkText = decodeTokens(chunkTokens).trim();
+    if (chunkText.length > 0) {
+      chunks.push({
+        text: chunkText,
+        startTok: start,
+        endTok: end,
+      });
+    }
     start += maxTokens - overlap;
   }
   return chunks;
@@ -28,7 +35,6 @@ function chunkTextTokens(text, maxTokens = 800, overlap = 100) {
 
 // 디코딩 함수
 function decodeTokens(tokens) {
-  const { decode } = require("gpt-tokenizer");
   return decode(tokens);
 }
 

@@ -1,146 +1,155 @@
 const { pool } = require("./mysql.js");
 
+// 구조: { id: number, embedding: Float32Array, metadata: object }[]
+let vectorCache = []; 
+let isCacheLoaded = false;
+
 // ---- helpers ----
-function l2Normalize(v) {
-  let sum = 0;
-  for (let i = 0; i < v.length; i++) sum += v[i] * v[i];
-  const n = Math.sqrt(sum) || 1;
-  if (n === 1) return v.slice();
-  const out = new Array(v.length);
-  for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
-  return out;
-}
 function dot(a, b) {
   let s = 0;
   for (let i = 0; i < a.length; i++) s += a[i] * b[i];
   return s;
 }
-function ensureDim(v, d = 1024) {
-  if (!Array.isArray(v) || v.length !== d) {
-    throw new Error(
-      `embedding dimension mismatch (expected ${d}, got ${Array.isArray(v) ? v.length : "NA"})`
-    );
-  }
+
+function l2Normalize(v) {
+  if (!v || v.length === 0) throw new Error("l2Normalize: invalid vector");
+  
+  let sum = 0;
+  for (let i = 0; i < v.length; i++) sum += v[i] * v[i];
+  const n = Math.sqrt(sum) || 1;
+  
+  if (n === 1) return new Float32Array(v);
+  
+  const out = new Float32Array(v.length);
+  for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
+  return out;
 }
+
 function safeJsonParse(s, fallback = null) {
-  try {
-    return typeof s === "string" ? JSON.parse(s) : s ?? fallback;
-  } catch {
-    return fallback;
-  }
+  try { return typeof s === "string" ? JSON.parse(s) : s ?? fallback; } 
+  catch { return fallback; }
+}
+
+// ---- cache loader ----
+async function loadCache() {
+  if (isCacheLoaded) return;
+  console.log("Loading vectors into memory...");
+  
+  const [rows] = await pool.query(`
+    SELECT d.id, d.metadata, e.embedding
+    FROM embeddings e
+    JOIN documents d ON d.id = e.document_id
+  `);
+
+  vectorCache = rows.map(r => ({
+    id: r.id,
+    metadata: safeJsonParse(r.metadata, {}),
+    // 여기서 미리 파싱하고 Float32Array로 박제해둠 (검색할 때 파싱 안 함)
+    embedding: new Float32Array(safeJsonParse(r.embedding, []))
+  }));
+
+  isCacheLoaded = true;
+  console.log(`Loaded ${vectorCache.length} vectors.`);
 }
 
 // ---- inserts ----
 async function insertDocumentWithEmbedding(content, metadata, embedding) {
-  ensureDim(embedding, 1024);
-  const normVec = l2Normalize(embedding);
+  if (embedding.length !== 1024) throw new Error("Dimension mismatch");
+
+  // 정규화 및 Float32 변환
+  const embNorm = l2Normalize(embedding);
+  // DB 저장을 위해 일반 배열로 변환 (JSON stringify용)
+  const embArray = Array.from(embNorm); 
 
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
 
     const [r1] = await conn.execute(
-      `INSERT INTO documents(content, metadata)
-       VALUES (?, ?)`,
+      `INSERT INTO documents(content, metadata) VALUES (?, ?)`,
       [content, JSON.stringify(metadata ?? {})]
     );
     const docId = r1.insertId;
 
     await conn.execute(
-      `INSERT INTO embeddings(document_id, embedding)
-       VALUES (?, ?)`,
-      [docId, JSON.stringify(normVec)]
+      `INSERT INTO embeddings(document_id, embedding) VALUES (?, ?)`,
+      [docId, JSON.stringify(embArray)]
     );
 
     await conn.commit();
+
+    if (isCacheLoaded) {
+      vectorCache.push({
+        id: docId,
+        metadata: metadata ?? {},
+        embedding: embNorm
+      });
+    }
+
     return docId;
   } catch (err) {
-    try { await conn.rollback(); } catch {}
-    console.error("❌ insertDocumentWithEmbedding 오류:", err);
+    await conn.rollback();
+    console.error("insert error:", err);
     throw err;
   } finally {
     conn.release();
   }
 }
 
-async function insertDocAsset(a) {
-  const conn = await pool.getConnection();
-  try {
-    const cap = Array.isArray(a.caption_emb) ? l2Normalize(a.caption_emb) : null;
+// ---- match ----
 
-    const [r] = await conn.execute(
-      `INSERT INTO doc_assets(sha256, filepath, page, type, image_url, caption_text, caption_emb, meta)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        a.sha256,
-        a.filepath,
-        a.page ?? null,
-        a.type,
-        a.image_url ?? null,
-        a.caption_text ?? null,
-        cap ? JSON.stringify(cap) : null,
-        JSON.stringify(a.meta ?? {}),
-      ]
+async function matchDocuments(queryEmbedding, options = {}) {
+  if (!isCacheLoaded) await loadCache();
+
+  const { k = 8, threshold = 0.7, types = null, sha256 = null } = options;
+
+  // 1. 쿼리 벡터 정규화
+  const q = l2Normalize(queryEmbedding); 
+  
+  const scored = [];
+
+  // 2. 메모리(Cache)에서 고속 검색 (DB 접근 X)
+  for (const item of vectorCache) {
+    // 필터링
+    if (types && types.length > 0) {
+      if (!types.includes(item.metadata.type)) continue;
+    }
+    if (sha256 && item.metadata.sha256 !== sha256) continue;
+
+    // 유사도 계산 (Float32Array라 빠름)
+    const sim = dot(q, item.embedding);
+    
+    if (sim >= threshold) {
+      scored.push({
+        id: item.id,
+        metadata: item.metadata,
+        similarity: sim
+      });
+    }
+  }
+
+  // 3. 정렬 및 Top K 자르기
+  scored.sort((a, b) => b.similarity - a.similarity);
+  const topK = scored.slice(0, k);
+
+  if (topK.length > 0) {
+    const ids = topK.map(x => x.id);
+    const [rows] = await pool.query(
+      `SELECT id, content FROM documents WHERE id IN (?)`, 
+      [ids]
     );
-    return r.insertId;
-  } catch (err) {
-    console.error("❌ insertDocAsset 오류:", err);
-    throw err;
-  } finally {
-    conn.release();
+    // 결과 합치기
+    for (const res of topK) {
+      const match = rows.find(r => r.id === res.id);
+      if (match) res.content = match.content;
+    }
   }
-}
 
-async function insertDocTable(t) {
-  const conn = await pool.getConnection();
-  try {
-    const [r] = await conn.execute(
-      `INSERT INTO doc_tables(asset_id, n_rows, n_cols, tsv, md, html)
-       VALUES (?, ?, ?, ?, ?, ?)`,
-      [t.asset_id, t.n_rows ?? null, t.n_cols ?? null, t.tsv ?? null, t.md ?? null, t.html ?? null]
-    );
-    return r.insertId;
-  } catch (err) {
-    console.error("❌ insertDocTable 오류:", err);
-    throw err;
-  } finally {
-    conn.release();
-  }
-}
-
-// ---- match (cosine = dot; 저장 시 정규화 전제) ----
-async function matchDocuments(queryEmbedding, { k = 8, threshold = 0.7 } = {}) {
-  ensureDim(queryEmbedding, 1024);
-  const q = l2Normalize(queryEmbedding);
-
-  const [rows] = await pool.query(`
-    SELECT d.id, d.content, d.metadata, e.embedding
-    FROM embeddings e
-    JOIN documents d ON d.id = e.document_id
-  `);
-
-  const scored = rows
-    .map((r) => {
-      const emb = safeJsonParse(r.embedding, []);
-      // 메타데이터도 파싱
-      const meta = safeJsonParse(r.metadata, {});
-      return {
-        id: r.id,
-        content: r.content,
-        metadata: meta,
-        similarity: emb.length === q.length ? dot(q, emb) : -1,
-      };
-    })
-    .filter((x) => x.similarity >= threshold)
-    .sort((a, b) => b.similarity - a.similarity)
-    .slice(0, k);
-
-  return scored;
+  return topK;
 }
 
 module.exports = {
   insertDocumentWithEmbedding,
-  insertDocAsset,
-  insertDocTable,
   matchDocuments,
+  loadCache
 };

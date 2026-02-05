@@ -1,0 +1,76 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: vfims-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DB_HOST=host.docker.internal
+      - EMB_URL=http://embedding:8001
+      - LLM_URL=http://llm:8002
+    volumes:
+      - ./uploads:/app/server/uploads
+      - ./.env:/app/.env
+    depends_on:
+      - embedding
+      - llm
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  embedding:
+    image: vllm/vllm-openai:latest
+    container_name: vfims-embedding
+    runtime: nvidia  # 이 줄 추가
+    ports:
+      - "8001:8001"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all  # 이 줄 추가
+    command: >
+      --model BAAI/bge-m3
+      --host 0.0.0.0
+      --port 8001
+      --gpu-memory-utilization 0.05
+      --max-model-len 8192
+      --disable-log-stats
+      --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+              
+  llm:
+    image: vllm/vllm-openai:latest
+    container_name: vfims-llm
+    runtime: nvidia  # 이 줄 추가
+    ports:
+      - "8002:8002"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all  # 이 줄 추가
+    command: >
+      --model QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
+      --served-model-name qwen-coder
+      --quantization awq
+      --dtype half
+      --kv-cache-dtype fp8
+      --gpu-memory-utilization 0.85
+      --max-model-len 12288
+      --enable-prefix-caching
+      --host 0.0.0.0
+      --port 8002
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

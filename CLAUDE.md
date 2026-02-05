@@ -13,7 +13,7 @@ Three-service architecture orchestrated via `docker-compose.yml`:
 - **Backend** (`server/`, port 8000) — Node.js/Express. Handles file uploads, document parsing (invokes Python Docling as subprocess), text chunking, embedding requests, vector search, and RAG query orchestration. Plain JavaScript (CommonJS). Key files: `index.js` (main server ~992 lines), `chunk.js` (token-based splitter), `rag_langchain.js` (LangChain RAG chain with intent classification).
 - **Embedding service** (port 8001) — vLLM serving BAAI/bge-m3 (1024-dim vectors, max 8192 tokens). OpenAI-compatible API.
 - **LLM service** (port 8002) — vLLM serving Qwen3-Coder-30B-A3B (AWQ quantized, max 12288 tokens). OpenAI-compatible API. Served model name: `qwen-coder`.
-- **Frontend** (`web/`, Vite dev server) — React 19 + TypeScript + Tailwind CSS 4. Components: `UploadBox.tsx` (drag-drop file upload), `ChatView.tsx` (multi-turn conversation with streaming).
+- **Frontend** (`web/`, Vite dev server) — React 19 + TypeScript + Tailwind CSS 4. **테스트용이므로 우선순위 낮음.** Components: `UploadBox.tsx` (drag-drop file upload), `ChatView.tsx` (multi-turn conversation with streaming).
 - **Database** — MySQL (mysql2/promise, charset utf8mb4). Connection config in root `.env`. Vector embeddings stored as JSON arrays and cached in-memory as Float32Array for fast dot-product search (`db/repo.js`).
 - **MCP Server** (`mcp_server/`) — Model Context Protocol server using `@modelcontextprotocol/sdk`.
 

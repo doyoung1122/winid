@@ -1,5 +1,0 @@
-fastapi==0.112.2
-uvicorn[standard]==0.30.6
-sentence-transformers==2.7.0
-torch>=2.3.0
-numpy>=1.26.0
