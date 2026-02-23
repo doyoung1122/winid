@@ -1,0 +1,24 @@
+# 모델 파일 (수십 GB)
+models/
+
+# 의존성 (컨테이너 안에서 설치)
+node_modules/
+server/node_modules/
+
+# 업로드/출력 파일
+uploads/
+outputs/
+
+# 파이썬 캐시
+__pycache__/
+*.pyc
+*.pyo
+
+# 개발 도구
+.git/
+.env
+*.log
+
+# 기타
+tmp/
+.DS_Store

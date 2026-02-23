@@ -1,0 +1,9 @@
+mysql-connector-python
+pandas
+numpy
+scikit-learn
+lightgbm
+catboost
+xgboost
+python-dotenv
+joblib

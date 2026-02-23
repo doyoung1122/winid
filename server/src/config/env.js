@@ -20,6 +20,12 @@ export const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
 // =========================
 export const EMB_URL = (process.env.EMB_URL || "http://127.0.0.1:8001").replace(/\/$/, "");
 export const LLM_URL = (process.env.LLM_URL || "http://127.0.0.1:8002").replace(/\/$/, "");
+export const CHROMA_URL = (process.env.CHROMA_URL || "http://127.0.0.1:8003").replace(/\/$/, "");
+
+// =========================
+// Vector Backend
+// =========================
+export const VECTOR_BACKEND = process.env.VECTOR_BACKEND || "chroma"; // "mysql" | "chroma" | "both"
 
 // =========================
 // Model Names
@@ -69,6 +75,8 @@ export const MIN_TOP3_AVG = Number(process.env.MIN_TOP3_AVG || 0.55);
 export const TEXT_K = Number(process.env.TEXT_K || 5);
 export const TABLE_K = Number(process.env.TABLE_K || 10);
 export const IMAGE_K = Number(process.env.IMAGE_K || 4);
+export const STATS_K = Number(process.env.STATS_K || 8); // 통계 문서 검색 수
+export const CASE_K  = Number(process.env.CASE_K  || 5); // 개별 사례 문서 검색 수
 
 // =========================
 // Directory Paths
@@ -95,6 +103,8 @@ export default {
   ALLOWED_ORIGINS,
   EMB_URL,
   LLM_URL,
+  CHROMA_URL,
+  VECTOR_BACKEND,
   LLM_MODEL,
   EMB_MODEL,
   DOC_PY,
@@ -115,6 +125,8 @@ export default {
   TEXT_K,
   TABLE_K,
   IMAGE_K,
+  STATS_K,
+  CASE_K,
   SERVER_ROOT,
   UPLOAD_DIR,
   PUBLIC_DIR,

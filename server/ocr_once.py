@@ -13,7 +13,7 @@ from docling_core.types.doc import PictureItem, ImageRefMode
 # ==========================================================
 # [설정] 속도 최적화 (CUDA 사용)
 # ==========================================================
-FAST_MODE = True  # True여도 GPU를 쓰면 OCR이 빠릅니다.
+FAST_MODE = True
 IMAGE_RESOLUTION_SCALE = float(os.getenv("DL_IMAGE_SCALE", "1.5"))  # 이미지 해상도 (2.0 권장)
 MAX_TABLE_PREVIEW_ROWS = int(os.getenv("DL_MAX_TABLE_PREVIEW_ROWS", "5"))
 
@@ -36,8 +36,7 @@ def build_docling_converter():
     pdf_opts.generate_page_images = False  # 전체 페이지 이미지는 끔 (용량 절약)
     pdf_opts.generate_picture_images = True # 개별 그림/표 이미지는 킴 (필수)
 
-    # 3. OCR 설정 (GPU가 있으므로 OCR 켜도 빠릅니다)
-    # 스캔된 PDF도 처리하려면 do_ocr=True가 좋습니다.
+    # 3. OCR 설정
     pdf_opts.do_ocr = True 
     pdf_opts.do_table_structure = True
 

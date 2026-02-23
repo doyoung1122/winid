@@ -1,29 +1,18 @@
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: vfims-mysql
-    ports:
-      - "3306:3306"
-    environment:
-      - MYSQL_ROOT_PASSWORD=vfims123
-      - MYSQL_DATABASE=vfims
-    volumes:
-      - mysql_data:/var/lib/mysql
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
-
   backend:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: vfims-backend
     ports:
-      - "8000:8000"
+      - "8000:8000" 
     environment:
       - PORT=8000
-      - MY_HOST=host.docker.internal
-      - MY_PORT=3306
+      - MY_HOST=${MY_HOST}
+      - MY_PORT=${MY_PORT}
       - EMB_URL=http://host.docker.internal:8001
       - LLM_URL=http://host.docker.internal:8002
+      - CHROMA_URL=http://chromadb:8000
     volumes:
       - ./uploads:/app/server/uploads
       - ./.env:/app/.env
@@ -88,5 +77,15 @@ services:
               count: 1
               capabilities: [gpu]
 
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    container_name: vfims-chromadb
+    ports:
+      - "8003:8000"
+    volumes:
+      - chroma_data:/chroma/chroma
+    environment:
+      - ANONYMIZED_TELEMETRY=FALSE
+
 volumes:
-  mysql_data:
+  chroma_data:

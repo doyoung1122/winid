@@ -66,33 +66,82 @@ export async function callLLMStream(messages, options = {}) {
 
 /**
  * Read SSE stream and accumulate text
- * @param {ReadableStream} readable - SSE readable stream
+ * @param {ReadableStream} body - WHATWG ReadableStream from fetch response
  * @returns {Promise<string>} Accumulated text
  */
-async function readSSEToText(readable) {
-  return await new Promise((resolve, reject) => {
-    let acc = "";
-    readable.on("data", (buf) => {
-      const chunk = buf.toString();
-      const lines = chunk.split(/\r?\n/);
-      for (const line of lines) {
-        if (!line) continue;
-        if (line.startsWith("data: ")) {
-          const payload = line.slice(6);
-          if (payload === "[DONE]") continue;
-          try {
-            const json = JSON.parse(payload);
-            const content = json.choices?.[0]?.delta?.content || "";
-            acc += content;
-          } catch (e) {
-            // Ignore parse errors
-          }
-        }
-      }
-    });
-    readable.on("end", () => resolve(acc));
-    readable.on("error", (err) => reject(err));
+async function readSSEToText(body) {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let acc = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    for (const line of chunk.split(/\r?\n/)) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (payload === "[DONE]") continue;
+      try {
+        const content = JSON.parse(payload).choices?.[0]?.delta?.content || "";
+        acc += content;
+      } catch (_) {}
+    }
+  }
+  return acc;
+}
+
+/**
+ * Call LLM with streaming, invoking onToken for each token
+ * @param {Array<{role: string, content: string}>} messages
+ * @param {Object} options
+ * @param {(token: string) => void} onToken
+ * @returns {Promise<string>} Accumulated response text
+ */
+export async function callLLMStreamTokens(messages, options = {}, onToken) {
+  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9 } = options;
+
+  const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      model: LLM_MODEL,
+      messages,
+      temperature,
+      max_tokens: maxTokens,
+      top_p,
+      stream: true,
+    }),
   });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`LLM call failed: ${response.status} ${err}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let acc = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    for (const line of chunk.split(/\r?\n/)) {
+      if (!line.startsWith("data: ")) continue;
+      const payload = line.slice(6);
+      if (payload === "[DONE]") continue;
+      try {
+        const content = JSON.parse(payload).choices?.[0]?.delta?.content || "";
+        if (content) {
+          acc += content;
+          onToken(content);
+        }
+      } catch (_) {}
+    }
+  }
+  return acc;
 }
 
 /**
@@ -131,6 +180,7 @@ export function withTimeout(promise, ms = 30000, tag = "req") {
 export default {
   callLLM,
   callLLMStream,
+  callLLMStreamTokens,
   checkLLMHealth,
   withTimeout,
 };

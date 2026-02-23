@@ -1,12 +1,61 @@
-import {
-  matchDocuments,
-  insertDocumentWithEmbedding,
-  insertDocAsset,
-  insertDocTable,
-  loadCache,
-} from "../../../db/repo.js";
+import * as mysqlRepo from "../../../db/repo.js";
+import * as chromaRepo from "../../../db/chroma.js";
 import { getEmbedding } from "./embedding.service.js";
-import { RETRIEVE_MIN, TEXT_K, TABLE_K, IMAGE_K } from "../config/env.js";
+import { RETRIEVE_MIN, TEXT_K, TABLE_K, IMAGE_K, VECTOR_BACKEND } from "../config/env.js";
+
+// MySQL-only exports (doc_assets / doc_tables are MySQL-only features)
+export const { insertDocAsset, insertDocTable } = mysqlRepo;
+
+/**
+ * Get the repo module for the given backend name.
+ */
+function getRepo(backend) {
+  if (backend === "chroma") return chromaRepo;
+  return mysqlRepo;
+}
+
+/**
+ * Insert a document+embedding into the specified backend(s).
+ * When VECTOR_BACKEND is "both", inserts into MySQL and ChromaDB.
+ */
+export async function insertDocumentWithEmbedding(content, metadata, embedding, backendOverride) {
+  const backend = backendOverride || VECTOR_BACKEND;
+
+  if (backend === "both") {
+    const [mysqlId, chromaId] = await Promise.all([
+      mysqlRepo.insertDocumentWithEmbedding(content, metadata, embedding),
+      chromaRepo.insertDocumentWithEmbedding(content, metadata, embedding),
+    ]);
+    return mysqlId; // Return MySQL ID as primary
+  }
+
+  const repo = getRepo(backend);
+  return repo.insertDocumentWithEmbedding(content, metadata, embedding);
+}
+
+/**
+ * Load vector cache for the specified backend(s).
+ */
+export async function loadCache(backendOverride) {
+  const backend = backendOverride || VECTOR_BACKEND;
+
+  if (backend === "both") {
+    await Promise.all([mysqlRepo.loadCache(), chromaRepo.loadCache()]);
+    return;
+  }
+
+  const repo = getRepo(backend);
+  await repo.loadCache();
+}
+
+/**
+ * Match documents using the specified backend.
+ */
+export async function matchDocuments(queryEmbedding, options = {}) {
+  const { backend = VECTOR_BACKEND, ...rest } = options;
+  const repo = getRepo(backend === "both" ? "mysql" : backend);
+  return repo.matchDocuments(queryEmbedding, rest);
+}
 
 /**
  * Search documents by query text
@@ -15,7 +64,10 @@ import { RETRIEVE_MIN, TEXT_K, TABLE_K, IMAGE_K } from "../config/env.js";
  * @returns {Promise<Object>} Search results with matches
  */
 export async function searchByQuery(queryText, options = {}) {
-  const { match_count = TEXT_K, doc_sha = null } = options;
+  const { match_count = TEXT_K, doc_sha = null, backend } = options;
+
+  const effectiveBackend = backend || (VECTOR_BACKEND === "both" ? "mysql" : VECTOR_BACKEND);
+  const repo = getRepo(effectiveBackend);
 
   // Get query embedding
   const qVec = await getEmbedding(queryText, "query");
@@ -26,19 +78,19 @@ export async function searchByQuery(queryText, options = {}) {
   };
 
   // Search across different content types
-  const textMatches = await matchDocuments(qVec, {
+  const textMatches = await repo.matchDocuments(qVec, {
     ...baseOpts,
     k: match_count || TEXT_K,
     types: ["pdf", "text", "office", "hwpx", "hwp"],
   });
 
-  const tableMatches = await matchDocuments(qVec, {
+  const tableMatches = await repo.matchDocuments(qVec, {
     ...baseOpts,
     k: TABLE_K,
     types: ["table_row"],
   });
 
-  const imageMatches = await matchDocuments(qVec, {
+  const imageMatches = await repo.matchDocuments(qVec, {
     ...baseOpts,
     k: IMAGE_K,
     types: ["image_caption"],
@@ -95,15 +147,6 @@ ${t}
 
   return { context: ctx.trim(), sources };
 }
-
-// Re-export db functions for convenience
-export {
-  matchDocuments,
-  insertDocumentWithEmbedding,
-  insertDocAsset,
-  insertDocTable,
-  loadCache,
-};
 
 export default {
   searchByQuery,

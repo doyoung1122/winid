@@ -2,6 +2,7 @@
   "type": "module",
   "dependencies": {
     "@langchain/core": "^1.1.2",
+    "chromadb": "^3.2.2",
     "dotenv": "^17.2.3",
     "jszip": "^3.10.1",
     "mysql2": "^3.15.3",
