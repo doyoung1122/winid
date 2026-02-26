@@ -385,5 +385,12 @@ export async function queryBySQL(question, intent, entities) {
     ? `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`
     : validateNote;
 
-  return { sql, rowCount: rows.length, context: autoNote + rawContext };
+  // 조회 조건 헤더 추가 (LLM이 어떤 데이터인지 인식하도록)
+  const condParts = [];
+  if (entities.year)   condParts.push(`${entities.year}년`);
+  if (entities.region) condParts.push(entities.region);
+  if (entities.date_ref && intent === "stats") condParts.push(`날짜: ${entities.date_ref}`);
+  const condHeader = condParts.length > 0 ? `[조회 조건: ${condParts.join(" ")}]\n` : "";
+
+  return { sql, rowCount: rows.length, context: condHeader + autoNote + rawContext };
 }
