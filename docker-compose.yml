@@ -10,6 +10,9 @@ services:
       - PORT=8000
       - MY_HOST=${MY_HOST}
       - MY_PORT=${MY_PORT}
+      - MY_USER=${MY_USER}
+      - MY_PASS=${MY_PASS}
+      - MY_DB=${MY_DB}
       - EMB_URL=http://host.docker.internal:8001
       - LLM_URL=http://host.docker.internal:8002
       - CHROMA_URL=http://chromadb:8000
@@ -59,8 +62,8 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     command: >
-      --model QuantTrio/Qwen3-Coder-30B-A3B-Instruct-AWQ
-      --served-model-name qwen-coder
+      --model QuixiAI/Qwen3-30B-A3B-AWQ
+      --served-model-name qwen3
       --quantization awq
       --dtype half
       --kv-cache-dtype fp8

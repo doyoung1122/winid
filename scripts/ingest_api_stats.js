@@ -35,7 +35,7 @@ const CHROMA = {
   ssl: _chromaUrl.protocol === "https:",
 };
 
-const COLLECTION = "vfims_documents";
+const COLLECTION = "vfims_stats";
 const BATCH_SIZE = 32;
 const MAX_CATEGORIES = 30; // 카테고리 수 많은 stat_type(발화지점 252개 등) 상위 N개만
 
@@ -47,6 +47,7 @@ const args = Object.fromEntries(
     .map(([k, v]) => [k, v ?? true])
 );
 const FROM_YEAR = args.from ? Number(args.from) : null;
+const TARGET_DATE = args.date || null; // "YYYY-MM-DD" 형식, 특정 날만 처리
 const DRY_RUN = !!args["dry-run"];
 
 // ================================================================
@@ -72,7 +73,7 @@ function fmt(n) {
 }
 
 function fmtDmg(v) {
-  v = Number(v);
+  v = Number(v) * 1000; // DB 저장 단위: 천원 → 원으로 변환
   if (!v) return "없음";
   if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}억원`;
   if (v >= 10_000)      return `${Math.round(v / 10_000).toLocaleString("ko-KR")}만원`;
@@ -82,8 +83,8 @@ function fmtDmg(v) {
 // ================================================================
 // 문서 생성: (year, month, stat_type, categories[]) → 자연어 문자열
 // ================================================================
-function buildDocument(year, month, stat_type, categories) {
-  const date   = `${year}년 ${month}월`;
+function buildDocument(year, month, day, stat_type, categories) {
+  const date   = day ? `${year}년 ${month}월 ${day}일` : `${year}년 ${month}월`;
   const header = STAT_HEADERS[stat_type] ?? `${stat_type}별`;
 
   // 합계
@@ -120,10 +121,10 @@ function buildDocument(year, month, stat_type, categories) {
 // ================================================================
 // 문서 ID
 // ================================================================
-function makeId(year, month, stat_type) {
-  const key = `${year}_${String(month).padStart(2, "0")}_${stat_type}`;
+function makeId(year, month, day, stat_type) {
+  const key = `${year}_${String(month).padStart(2, "0")}_${String(day).padStart(2, "0")}_${stat_type}`;
   const hash = crypto.createHash("md5").update(key).digest("hex").slice(0, 6);
-  return `stats_${year}_${String(month).padStart(2, "0")}_${hash}`;
+  return `stats_${year}_${String(month).padStart(2, "0")}_${String(day).padStart(2, "0")}_${hash}`;
 }
 
 // ================================================================
@@ -148,8 +149,9 @@ async function main() {
   console.log("📥  vfs_data_api → ChromaDB 적재 파이프라인");
   console.log("    문서 단위: 연월 × stat_type (카테고리 전체 포함)");
   console.log("=".repeat(60));
-  if (DRY_RUN)   console.log("🔍  DRY-RUN 모드");
-  if (FROM_YEAR) console.log(`📅  ${FROM_YEAR}년 이후만 처리`);
+  if (DRY_RUN)     console.log("🔍  DRY-RUN 모드");
+  if (TARGET_DATE) console.log(`📅  특정 날짜만 처리: ${TARGET_DATE}`);
+  else if (FROM_YEAR) console.log(`📅  ${FROM_YEAR}년 이후만 처리`);
   console.log();
 
   // MySQL 연결
@@ -170,11 +172,14 @@ async function main() {
   console.log();
 
   // 카테고리별 집계 (fire_count DESC 정렬)
-  const where = FROM_YEAR ? `WHERE YEAR(fire_date) >= ${FROM_YEAR}` : "";
+  const where = TARGET_DATE
+    ? `WHERE DATE(fire_date) = '${TARGET_DATE}'`
+    : FROM_YEAR ? `WHERE YEAR(fire_date) >= ${FROM_YEAR}` : "";
   const [rows] = await db.query(`
     SELECT
       YEAR(fire_date)    AS year,
       MONTH(fire_date)   AS month,
+      DAY(fire_date)     AS day,
       stat_type,
       category,
       SUM(fire_count)    AS fire_count,
@@ -183,36 +188,37 @@ async function main() {
       SUM(damage_amount) AS damage_amount
     FROM vfs_data_api
     ${where}
-    GROUP BY YEAR(fire_date), MONTH(fire_date), stat_type, category
-    ORDER BY year, month, stat_type, fire_count DESC
+    GROUP BY YEAR(fire_date), MONTH(fire_date), DAY(fire_date), stat_type, category
+    ORDER BY year, month, day, stat_type, fire_count DESC
   `);
   console.log(`📊  카테고리별 집계: ${rows.length.toLocaleString()}행`);
 
   // 연월 × stat_type 단위로 그룹핑
   const groups = new Map();
   for (const r of rows) {
-    const key = `${r.year}_${r.month}_${r.stat_type}`;
-    if (!groups.has(key)) groups.set(key, { year: r.year, month: r.month, stat_type: r.stat_type, categories: [] });
+    const key = `${r.year}_${r.month}_${r.day}_${r.stat_type}`;
+    if (!groups.has(key)) groups.set(key, { year: r.year, month: r.month, day: r.day, stat_type: r.stat_type, categories: [] });
     groups.get(key).categories.push(r);
   }
 
   // 문서 생성
   const docs = [];
-  for (const { year, month, stat_type, categories } of groups.values()) {
-    const text = buildDocument(year, month, stat_type, categories);
+  for (const { year, month, day, stat_type, categories } of groups.values()) {
+    const text = buildDocument(year, month, day, stat_type, categories);
     const totalFire   = categories.reduce((s, r) => s + Number(r.fire_count),    0);
     const totalDeath  = categories.reduce((s, r) => s + Number(r.death_count),   0);
     const totalInjury = categories.reduce((s, r) => s + Number(r.injury_count),  0);
     const totalDamage = categories.reduce((s, r) => s + Number(r.damage_amount), 0);
 
     docs.push({
-      id:   makeId(year, month, stat_type),
+      id:   makeId(year, month, day, stat_type),
       text,
       meta: {
         doc_type:      "stats",
         stat_type,
         year:          Number(year),
         month:         Number(month),
+        day:           Number(day),
         category_count: categories.length,
         fire_count:    totalFire,
         death_count:   totalDeath,

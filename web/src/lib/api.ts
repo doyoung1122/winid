@@ -54,3 +54,63 @@ export async function askQuery(
     sources: Array.isArray(json?.sources) ? json.sources : [],
   };
 }
+
+/** SSE 스트리밍 요청 (POST /query/stream) */
+export async function askQueryStream(
+  body: any,
+  onToken: (token: string) => void,
+  opts?: { signal?: AbortSignal }
+): Promise<{ sources: SourceMeta[]; rag_mode: string }> {
+  const res = await fetch(`${API_BASE}/query/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: opts?.signal,
+  });
+
+  if (!res.ok) {
+    let detail = "";
+    try { detail = await res.text(); } catch {}
+    throw new Error(`HTTP ${res.status} ${res.statusText} ${detail}`.trim());
+  }
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let sources: SourceMeta[] = [];
+  let rag_mode = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? "";
+
+    let eventType = "message";
+    for (const line of lines) {
+      if (line.startsWith("event: ")) {
+        eventType = line.slice(7).trim();
+      } else if (line.startsWith("data: ")) {
+        const raw = line.slice(6);
+        try {
+          const json = JSON.parse(raw);
+          if (eventType === "done") {
+            sources = Array.isArray(json.sources) ? json.sources : [];
+            rag_mode = json.rag_mode ?? "";
+          } else if (eventType === "error") {
+            throw new Error(json.error || "stream error");
+          } else if (json.token !== undefined) {
+            onToken(json.token);
+          }
+        } catch (e) {
+          if (eventType === "error") throw e;
+        }
+        eventType = "message";
+      }
+    }
+  }
+
+  return { sources, rag_mode };
+}

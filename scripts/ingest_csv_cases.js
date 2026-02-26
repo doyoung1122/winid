@@ -74,7 +74,7 @@ function fmtTime(seconds) {
 }
 
 function fmtDmg(v) {
-  v = Number(v);
+  v = Number(v) * 1000; // DB 저장 단위: 천원 → 원으로 변환
   if (!v) return null;
   if (v >= 100_000_000) return `${(v / 100_000_000).toFixed(1)}억원`;
   if (v >= 10_000)      return `${Math.round(v / 10_000).toLocaleString("ko-KR")}만원`;

@@ -7,7 +7,7 @@ import { LLM_URL, LLM_MODEL } from "../config/env.js";
  * @returns {Promise<string>} LLM response content
  */
 export async function callLLM(messages, options = {}) {
-  const { temperature = 0.7, maxTokens = 2048, stream = false } = options;
+  const { temperature = 0.7, maxTokens = 2048, stream = false, enableThinking = false } = options;
 
   const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
     method: "POST",
@@ -18,6 +18,7 @@ export async function callLLM(messages, options = {}) {
       temperature,
       max_tokens: maxTokens,
       stream,
+      chat_template_kwargs: { enable_thinking: enableThinking },
     }),
   });
 
@@ -37,7 +38,7 @@ export async function callLLM(messages, options = {}) {
  * @returns {Promise<string>} Accumulated response text
  */
 export async function callLLMStream(messages, options = {}) {
-  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9 } = options;
+  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9, enableThinking = false } = options;
 
   const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
     method: "POST",
@@ -52,6 +53,7 @@ export async function callLLMStream(messages, options = {}) {
       max_tokens: maxTokens,
       top_p,
       stream: true,
+      chat_template_kwargs: { enable_thinking: enableThinking },
     }),
   });
 
@@ -98,7 +100,7 @@ async function readSSEToText(body) {
  * @returns {Promise<string>} Accumulated response text
  */
 export async function callLLMStreamTokens(messages, options = {}, onToken) {
-  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9 } = options;
+  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9, enableThinking = false } = options;
 
   const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
     method: "POST",
@@ -113,6 +115,7 @@ export async function callLLMStreamTokens(messages, options = {}, onToken) {
       max_tokens: maxTokens,
       top_p,
       stream: true,
+      chat_template_kwargs: { enable_thinking: enableThinking },
     }),
   });
 

@@ -39,15 +39,26 @@ const vllmEmbedder = {
 
 // ---- Collection cache ----
 let _collection = null;
+let _statsCollection = null;
 
 async function getCollection() {
   if (_collection) return _collection;
   _collection = await client.getOrCreateCollection({
     name: "vfims_documents",
-    embeddingFunction: null, // 항상 pre-computed embedding 직접 주입, EF 등록 불필요
+    embeddingFunction: null,
     metadata: { "hnsw:space": "cosine" },
   });
   return _collection;
+}
+
+async function getStatsCollection() {
+  if (_statsCollection) return _statsCollection;
+  _statsCollection = await client.getOrCreateCollection({
+    name: "vfims_stats",
+    embeddingFunction: null,
+    metadata: { "hnsw:space": "cosine" },
+  });
+  return _statsCollection;
 }
 
 // ---- helpers ----
@@ -135,9 +146,10 @@ function unflattenMetadata(flat) {
  * ChromaDB cosine distance = 1 - cosine_similarity, so we convert.
  */
 async function matchDocuments(queryEmbedding, options = {}) {
-  const { k = 8, threshold = 0.7, types = null, sha256 = null, doc_type = null } = options;
+  const { k = 8, threshold = 0.7, types = null, sha256 = null, doc_type = null, metaFilter = null } = options;
 
-  const col = await getCollection();
+  // stats 문서는 전용 컬렉션 사용 (대형 컬렉션 HNSW 오류 방지)
+  const col = doc_type === "stats" ? await getStatsCollection() : await getCollection();
   const qNorm = l2Normalize(queryEmbedding);
 
   // Build ChromaDB where filter
@@ -148,8 +160,15 @@ async function matchDocuments(queryEmbedding, options = {}) {
   if (sha256) {
     whereConditions.push({ sha256: sha256 });
   }
-  if (doc_type) {
+  // doc_type="stats"는 전용 컬렉션을 쓰므로 where 필터 불필요
+  if (doc_type && doc_type !== "stats") {
     whereConditions.push({ doc_type: { $eq: doc_type } });
+  }
+  // 커스텀 메타데이터 필터 (예: 날짜 특정)
+  if (metaFilter) {
+    for (const [key, val] of Object.entries(metaFilter)) {
+      whereConditions.push({ [key]: { $eq: val } });
+    }
   }
 
   const queryArgs = {
@@ -168,8 +187,13 @@ async function matchDocuments(queryEmbedding, options = {}) {
   try {
     result = await col.query(queryArgs);
   } catch (err) {
-    // If collection is empty, ChromaDB may throw
-    if (err.message?.includes("not enough") || err.message?.includes("empty")) {
+    // 필터 결과가 k보다 적거나 컬렉션이 비어있을 때 ChromaDB가 던지는 오류들
+    if (
+      err.message?.includes("not enough") ||
+      err.message?.includes("empty") ||
+      err.message?.includes("contigious") ||
+      err.message?.includes("ef or M")
+    ) {
       return [];
     }
     throw err;
@@ -197,6 +221,99 @@ async function matchDocuments(queryEmbedding, options = {}) {
 
   // Already sorted by distance (ascending) from ChromaDB, which means sorted by similarity (descending)
   return results;
+}
+
+/**
+ * 날짜 기반 통계 문서 직접 조회 (벡터 검색 없이 메타데이터 필터만 사용)
+ * @param {{year: number, month: number, day: number}} date
+ * @returns {Promise<Array<{id, content, metadata, similarity}>>}
+ */
+export async function getStatsByDate({ year, month, day }) {
+  const col = await getStatsCollection();
+  try {
+    // day가 null이면 연/월만 필터 (지난달 등 월 단위 조회)
+    const conditions = [{ year: { $eq: year } }, { month: { $eq: month } }];
+    if (day != null) conditions.push({ day: { $eq: day } });
+    const result = await col.get({
+      where: { $and: conditions },
+      include: [IncludeEnum.documents, IncludeEnum.metadatas],
+    });
+    const ids = result.ids || [];
+    const documents = result.documents || [];
+    const metadatas = result.metadatas || [];
+    return ids.map((id, i) => ({
+      id,
+      content: documents[i] || "",
+      metadata: unflattenMetadata(metadatas[i]),
+      similarity: 1.0, // 직접 조회이므로 유사도 1로 설정
+    }));
+  } catch (err) {
+    console.warn("getStatsByDate 오류:", err.message);
+    return [];
+  }
+}
+
+/**
+ * 날짜 범위 기반 통계 문서 조회 (일주일 등)
+ * @param {string} startDate "YYYY-MM-DD"
+ * @param {string} endDate   "YYYY-MM-DD"
+ */
+export async function getStatsByDateRange(startDate, endDate) {
+  const [sy, sm, sd] = startDate.split("-").map(Number);
+  const [ey, em, ed] = endDate.split("-").map(Number);
+  const start = new Date(sy, sm - 1, sd);
+  const end   = new Date(ey, em - 1, ed);
+
+  const results = [];
+  const cur = new Date(start);
+  while (cur <= end) {
+    const year  = cur.getFullYear();
+    const month = cur.getMonth() + 1;
+    const day   = cur.getDate();
+    const dayResults = await getStatsByDate({ year, month, day });
+    results.push(...dayResults);
+    cur.setDate(cur.getDate() + 1);
+  }
+  return results;
+}
+
+/**
+ * 지역명·연도 기반 사례 문서 직접 조회 (벡터 검색 없이 메타데이터 필터 사용)
+ * region은 포함 검색 (JS 포스트 필터), year는 ChromaDB where 필터
+ * @param {{year?: number, region?: string}} meta
+ * @returns {Promise<Array<{id, content, metadata, similarity}>>}
+ */
+export async function getCasesByMeta({ year, region, building } = {}) {
+  const col = await getCollection();
+  const conditions = [{ doc_type: { $eq: "case" } }];
+  if (year) conditions.push({ year: { $eq: year } });
+
+  const where = conditions.length === 1 ? conditions[0] : { $and: conditions };
+
+  try {
+    const result = await col.get({
+      where,
+      include: [IncludeEnum.documents, IncludeEnum.metadatas],
+      limit: 50,
+    });
+    let items = (result.ids || []).map((id, i) => ({
+      id,
+      content: result.documents[i] || "",
+      metadata: unflattenMetadata(result.metadatas[i]),
+      similarity: 1.0,
+    }));
+    // region/building은 ChromaDB 부분 문자열 미지원 → JS 포스트 필터
+    if (region) {
+      items = items.filter((m) => (m.metadata.region || "").includes(region));
+    }
+    if (building) {
+      items = items.filter((m) => (m.content || "").includes(building));
+    }
+    return items;
+  } catch (err) {
+    console.warn("getCasesByMeta 오류:", err.message);
+    return [];
+  }
 }
 
 /**

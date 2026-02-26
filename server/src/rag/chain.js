@@ -1,336 +1,141 @@
-import {
-  RunnableSequence,
-  RunnableBranch,
-  RunnableLambda,
-} from "@langchain/core/runnables";
-
-import { getEmbedding } from "../services/embedding.service.js";
 import { callLLMStream, callLLMStreamTokens } from "../services/llm.service.js";
-import { matchDocuments } from "../services/vector.service.js";
 import { classifyIntent } from "./intent.js";
+import { queryBySQL } from "./sql.js";
 import {
-  SYSTEM_RAG,
-  SYSTEM_STATS,
-  SYSTEM_TABLE,
+  SYSTEM_SQL_STATS,
+  SYSTEM_SQL_CASE,
   SYSTEM_SMALLTALK,
   SYSTEM_GENERAL,
-  smalltalkRe,
 } from "./prompts.js";
-import {
-  RETRIEVE_MIN,
-  USE_AS_CTX_MIN,
-  MIN_TOP3_AVG,
-  TEXT_K,
-  TABLE_K,
-  IMAGE_K,
-  STATS_K,
-  CASE_K,
-} from "../config/env.js";
 
 // =========================
-// 헬퍼: 유사도 통계
+// 헬퍼: 이모지 제거
 // =========================
-function calcStats(matches) {
-  const sims = matches.map((m) => m.similarity ?? 0);
-  const maxSim = sims.length ? Math.max(...sims) : 0;
-  const sorted = [...sims].sort((a, b) => b - a);
-  const top3Avg = sorted.slice(0, 3).reduce((a, b) => a + b, 0) / (Math.min(sorted.length, 3) || 1);
-  return { maxSim, top3Avg };
+function stripEmojis(str) {
+  return str
+    .replace(/\p{Extended_Pictographic}/gu, "")
+    .replace(/[\u200D\uFE0F\uFE0E]/g, "")
+    .replace(/[ \t]{2,}/g, " ");
 }
 
 // =========================
-// 헬퍼: 컨텍스트 문자열 생성
+// 헬퍼: 오늘 날짜 문자열
 // =========================
-function buildCtxString(matches, maxLen = 4000, tagName = "document") {
-  let ctx = "";
-  let length = 0;
-  const sources = [];
-
-  for (const m of matches) {
-    let t = m.content?.trim();
-    if (!t) continue;
-    if (t.length > 1600) t = t.slice(0, 800) + "\n...\n" + t.slice(-800);
-    if (length + t.length > maxLen) break;
-
-    const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata || {};
-
-    if (tagName === "stats") {
-      const statType = meta.stat_type || "";
-      const year = meta.year || "";
-      const month = meta.month || "";
-      ctx += `<stats stat_type="${statType}" year="${year}" month="${month}">\n${t}\n</stats>\n\n`;
-    } else if (meta.doc_type === "case") {
-      const year = meta.year || "";
-      const region = meta.region || "";
-      const cause = meta.cause_main || "";
-      ctx += `<case year="${year}" region="${region}" cause="${cause}">\n${t}\n</case>\n\n`;
-      sources.push({ filename: `사례_${year}_${region}`, similarity: m.similarity, type: "case" });
-    } else {
-      const filename = (meta.filepath || "").split(/[\\/]/).pop();
-      const type = meta.type || "unknown";
-      const page = meta.page || "N/A";
-      ctx += `<document source="${filename}" page="${page}" type="${type}">\n${t}\n</document>\n\n`;
-      sources.push({ filename, similarity: m.similarity, page: meta.page, type });
-    }
-
-    length += t.length;
-  }
-
-  return { ctx: ctx.trim(), sources };
+function getTodayPrefix() {
+  const now = new Date();
+  const days = ["일", "월", "화", "수", "목", "금", "토"];
+  return `오늘 날짜: ${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일 (${days[now.getDay()]}요일).`;
 }
 
 // =========================
-// 1) 질문 임베딩 + 4종 문서 검색
+// 핵심: 인텐트 분류 → SQL 조회 → 컨텍스트 결정
 // =========================
-const embedQuestion = RunnableLambda.from(async (input) => {
-  const { question, match_count = TEXT_K, doc_sha = null } = input;
-
-  const qVec = await getEmbedding(question, "query");
-
-  const baseOpts = {
-    threshold: RETRIEVE_MIN,
-    ...(doc_sha ? { sha256: doc_sha } : {}),
-  };
-
-  // 5종 병렬 검색
-  const [textMatches, tableMatches, imageMatches, statsMatches, caseMatches] = await Promise.all([
-    matchDocuments(qVec, { ...baseOpts, k: match_count || TEXT_K, types: ["pdf", "text", "office", "hwpx", "hwp"] }),
-    matchDocuments(qVec, { ...baseOpts, k: TABLE_K, types: ["table_row"] }),
-    matchDocuments(qVec, { ...baseOpts, k: IMAGE_K, types: ["image_caption"] }),
-    matchDocuments(qVec, { ...baseOpts, k: STATS_K, doc_type: "stats" }),
-    matchDocuments(qVec, { ...baseOpts, k: CASE_K,  doc_type: "case" }),
-  ]);
-
-  const regularMatches = [...textMatches, ...tableMatches, ...imageMatches, ...caseMatches];
-
-  const { maxSim: regularMaxSim, top3Avg: regularTop3Avg } = calcStats(regularMatches);
-  const { maxSim: statsMaxSim } = calcStats(statsMatches);
-
-  return { ...input, qVec, regularMatches, statsMatches, regularMaxSim, regularTop3Avg, statsMaxSim };
-});
-
-// =========================
-// 2) 인텐트 분류
-// =========================
-const classifyIntentNode = RunnableLambda.from(async (input) => {
-  const { question } = input;
-  if (smalltalkRe.test(question.trim())) {
-    return { ...input, intent: "smalltalk" };
-  }
-  const intent = await classifyIntent(question);
-  return { ...input, intent };
-});
-
-// =========================
-// 3) 컨텍스트 + 시스템 프롬프트 결정
-// =========================
-const buildContextNode = RunnableLambda.from(async (input) => {
-  const { intent, regularMatches, statsMatches, regularMaxSim, regularTop3Avg, statsMaxSim } = input;
+async function _searchAndBuild(rawQuestion) {
+  const { intent, query: question, entities } = await classifyIntent(rawQuestion);
 
   let systemPrompt = SYSTEM_GENERAL;
   let context = "";
-  let sources = [];
   let rag_mode = "general";
+  const sources = [];
 
   if (intent === "smalltalk") {
     systemPrompt = SYSTEM_SMALLTALK;
     rag_mode = "smalltalk";
-
-  } else if (intent === "stats" && statsMaxSim >= USE_AS_CTX_MIN) {
-    // 통계 문서가 충분히 유사 → stats 모드
-    const { ctx, sources: s } = buildCtxString(statsMatches, 5000, "stats");
-    systemPrompt = SYSTEM_STATS;
-    context = ctx;
-    sources = s;
-    rag_mode = "rag-stats";
-
-  } else if (intent === "stats" && regularMaxSim >= USE_AS_CTX_MIN) {
-    // 통계 질문인데 일반 문서에서 답 가능
-    const { ctx, sources: s } = buildCtxString(regularMatches);
-    systemPrompt = SYSTEM_RAG;
-    context = ctx;
-    sources = s;
-    rag_mode = "rag-plain";
-
-  } else if (intent === "stats") {
-    // 통계 질문이지만 관련 데이터 없음 → stats 데이터 적재 유도
-    systemPrompt = SYSTEM_GENERAL;
-    rag_mode = "general-stats";
-
-  } else if (intent === "table" && (regularMaxSim >= USE_AS_CTX_MIN || regularTop3Avg >= MIN_TOP3_AVG)) {
-    const { ctx, sources: s } = buildCtxString(regularMatches);
-    systemPrompt = SYSTEM_TABLE;
-    context = ctx;
-    sources = s;
-    rag_mode = "rag-table";
-
-  } else if (regularMaxSim >= USE_AS_CTX_MIN || regularTop3Avg >= MIN_TOP3_AVG) {
-    const { ctx, sources: s } = buildCtxString(regularMatches);
-    systemPrompt = SYSTEM_RAG;
-    context = ctx;
-    sources = s;
-    rag_mode = "rag-plain";
-
+  } else {
+    try {
+      const { context: sqlCtx } = await queryBySQL(question, intent, entities);
+      if (sqlCtx) {
+        context = sqlCtx;
+        rag_mode = intent === "stats" ? "sql-stats" : "sql-case";
+        systemPrompt = intent === "stats" ? SYSTEM_SQL_STATS : SYSTEM_SQL_CASE;
+      } else {
+        // SQL 성공했으나 결과 없음
+        rag_mode = intent === "stats" ? "no-data-stats" : "no-data-case";
+      }
+    } catch (e) {
+      console.warn("[chain] SQL 실패, general 모드 전환:", e.message);
+      rag_mode = "general";
+    }
   }
-  // else: SYSTEM_GENERAL (문서 없음)
 
-  return { ...input, systemPrompt, context, sources, rag_mode };
-});
+  systemPrompt = `${getTodayPrefix()}\n\n${systemPrompt}`;
+  return { question, intent, entities, systemPrompt, context, sources, rag_mode };
+}
 
 // =========================
-// 4) LLM 호출 (메인 답변)
+// 헬퍼: userContent 생성
 // =========================
-const callLLMNode = RunnableLambda.from(async (input) => {
-  const { systemPrompt, context, question, history, max_new_tokens, temperature, top_p } = input;
+function buildUserContent(question, context, rag_mode, entities) {
+  if (!context) {
+    if (rag_mode === "no-data-stats" && entities?.date_ref) {
+      return `[시스템 안내] 사용자가 요청한 날짜(${entities.date_ref})의 화재 통계 데이터가 데이터베이스에 없습니다. 이 사실을 먼저 명확히 알리고, 통계 조회 방법이나 대략적인 일반 정보를 안내하세요.\n\n사용자 질문: ${question}`;
+    }
+    if (rag_mode === "no-data-case") {
+      return `[시스템 안내] 해당 조건의 화재 사례 데이터가 데이터베이스에 없습니다. 이 사실을 명확히 알리고, 전문 지식을 바탕으로 답변하세요.\n\n사용자 질문: ${question}`;
+    }
+    return question;
+  }
 
+  return `아래는 사용자 질문과 관련된 데이터베이스 조회 결과입니다. 이 데이터가 바로 사용자가 찾는 정보입니다. 분류명(예: 창고시설, 공동주택)이 사용자 표현(예: 물류센터, 아파트)과 달라도 동일한 데이터로 취급하고 반드시 답변에 활용하세요.\n\n<db_result>\n${context}\n</db_result>\n\n사용자 질문: ${question}`;
+}
+
+// =========================
+// 헬퍼: 메시지 배열 생성
+// =========================
+function buildMessages(systemPrompt, history, userContent) {
   const messages = [{ role: "system", content: systemPrompt }];
-
   if (Array.isArray(history)) {
     history.forEach((turn) => {
-      if (turn.user) messages.push({ role: "user", content: turn.user });
+      if (turn.user)      messages.push({ role: "user",      content: turn.user });
       if (turn.assistant) messages.push({ role: "assistant", content: turn.assistant });
     });
   }
-
-  const userContent = context
-    ? `아래에 참고 데이터가 제공됩니다. 내용을 분석하여 사용자 질문에 답변하세요.\n\n<context>\n${context}\n</context>\n\n사용자 질문: ${question}`
-    : question;
-
   messages.push({ role: "user", content: userContent });
-
-  const txt = await callLLMStream(messages, { maxTokens: max_new_tokens, temperature, top_p });
-
-  return { ...input, answer: txt };
-});
+  return messages;
+}
 
 // =========================
-// 5) 최종 출력 포맷
-// =========================
-const formatOutput = RunnableLambda.from((input) => ({
-  answer: input.answer,
-  sources: input.sources || [],
-  rag_mode: input.rag_mode,
-}));
-
-// =========================
-// 6) 최종 실행 함수 (non-streaming)
+// 공개 API: non-streaming
 // =========================
 export async function runRag({
   question,
   history = [],
-  match_count = TEXT_K,
   max_new_tokens = 800,
   temperature = 0.3,
   top_p = 0.9,
-  doc_sha = null,
 }) {
-  const base = { question, history, match_count, max_new_tokens, temperature, top_p, doc_sha };
-  const chain = RunnableSequence.from([
-    embedQuestion,
-    classifyIntentNode,
-    buildContextNode,
-    callLLMNode,
-    formatOutput,
-  ]);
-  return await chain.invoke(base);
+  const { question: q, entities, systemPrompt, context, sources, rag_mode } =
+    await _searchAndBuild(question);
+
+  const messages = buildMessages(systemPrompt, history, buildUserContent(q, context, rag_mode, entities));
+  // 통계 모드는 일관된 수치 답변을 위해 낮은 temperature 강제
+  const effectiveTemp = rag_mode === "sql-stats" ? Math.min(temperature, 0.1) : temperature;
+  const txt = await callLLMStream(messages, { maxTokens: max_new_tokens, temperature: effectiveTemp, top_p });
+
+  return { answer: stripEmojis(txt), sources, rag_mode };
 }
 
 // =========================
-// 7) SSE 스트리밍 실행 함수
+// 공개 API: SSE 스트리밍
 // =========================
 export async function runRagStream({
   question,
   history = [],
-  match_count = TEXT_K,
   max_new_tokens = 800,
   temperature = 0.3,
   top_p = 0.9,
-  doc_sha = null,
   onToken,
 }) {
-  // 1. 임베딩 + 4종 병렬 검색
-  const qVec = await getEmbedding(question, "query");
-  const baseOpts = { threshold: RETRIEVE_MIN, ...(doc_sha ? { sha256: doc_sha } : {}) };
+  const { question: q, entities, systemPrompt, context, sources, rag_mode } =
+    await _searchAndBuild(question);
 
-  const [textMatches, tableMatches, imageMatches, statsMatches, caseMatches] = await Promise.all([
-    matchDocuments(qVec, { ...baseOpts, k: match_count || TEXT_K, types: ["pdf", "text", "office", "hwpx", "hwp"] }),
-    matchDocuments(qVec, { ...baseOpts, k: TABLE_K, types: ["table_row"] }),
-    matchDocuments(qVec, { ...baseOpts, k: IMAGE_K, types: ["image_caption"] }),
-    matchDocuments(qVec, { ...baseOpts, k: STATS_K, doc_type: "stats" }),
-    matchDocuments(qVec, { ...baseOpts, k: CASE_K,  doc_type: "case" }),
-  ]);
-
-  const regularMatches = [...textMatches, ...tableMatches, ...imageMatches, ...caseMatches];
-  const { maxSim: regularMaxSim, top3Avg: regularTop3Avg } = calcStats(regularMatches);
-  const { maxSim: statsMaxSim } = calcStats(statsMatches);
-
-  // 2. 인텐트 분류
-  let intent;
-  if (smalltalkRe.test(question.trim())) {
-    intent = "smalltalk";
-  } else {
-    intent = await classifyIntent(question);
-  }
-
-  // 3. 컨텍스트 + 프롬프트 결정
-  let systemPrompt = SYSTEM_GENERAL;
-  let ctx = "";
-  let sources = [];
-  let rag_mode = "general";
-
-  if (intent === "smalltalk") {
-    systemPrompt = SYSTEM_SMALLTALK;
-    rag_mode = "smalltalk";
-
-  } else if (intent === "stats" && statsMaxSim >= USE_AS_CTX_MIN) {
-    const { ctx: c, sources: s } = buildCtxString(statsMatches, 5000, "stats");
-    systemPrompt = SYSTEM_STATS;
-    ctx = c;
-    sources = s;
-    rag_mode = "rag-stats";
-
-  } else if (intent === "stats" && regularMaxSim >= USE_AS_CTX_MIN) {
-    const { ctx: c, sources: s } = buildCtxString(regularMatches);
-    systemPrompt = SYSTEM_RAG;
-    ctx = c;
-    sources = s;
-    rag_mode = "rag-plain";
-
-  } else if (intent === "stats") {
-    systemPrompt = SYSTEM_GENERAL;
-    rag_mode = "general-stats";
-
-  } else if (intent === "table" && (regularMaxSim >= USE_AS_CTX_MIN || regularTop3Avg >= MIN_TOP3_AVG)) {
-    const { ctx: c, sources: s } = buildCtxString(regularMatches);
-    systemPrompt = SYSTEM_TABLE;
-    ctx = c;
-    sources = s;
-    rag_mode = "rag-table";
-
-  } else if (regularMaxSim >= USE_AS_CTX_MIN || regularTop3Avg >= MIN_TOP3_AVG) {
-    const { ctx: c, sources: s } = buildCtxString(regularMatches);
-    systemPrompt = SYSTEM_RAG;
-    ctx = c;
-    sources = s;
-    rag_mode = "rag-plain";
-  }
-
-  // 4. 메시지 구성
-  const messages = [{ role: "system", content: systemPrompt }];
-  if (Array.isArray(history)) {
-    history.forEach((turn) => {
-      if (turn.user) messages.push({ role: "user", content: turn.user });
-      if (turn.assistant) messages.push({ role: "assistant", content: turn.assistant });
-    });
-  }
-
-  const userContent = ctx
-    ? `아래에 참고 데이터가 제공됩니다. 내용을 분석하여 사용자 질문에 답변하세요.\n\n<context>\n${ctx}\n</context>\n\n사용자 질문: ${question}`
-    : question;
-  messages.push({ role: "user", content: userContent });
-
-  // 5. LLM 스트리밍
-  await callLLMStreamTokens(messages, { maxTokens: max_new_tokens, temperature, top_p }, onToken);
+  const messages = buildMessages(systemPrompt, history, buildUserContent(q, context, rag_mode, entities));
+  const effectiveTemp = rag_mode === "sql-stats" ? Math.min(temperature, 0.1) : temperature;
+  await callLLMStreamTokens(
+    messages,
+    { maxTokens: max_new_tokens, temperature: effectiveTemp, top_p },
+    (token) => onToken(stripEmojis(token)),
+  );
 
   return { sources, rag_mode };
 }

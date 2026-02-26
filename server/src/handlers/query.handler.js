@@ -1,5 +1,48 @@
 import { runRag, runRagStream } from "../rag/chain.js";
 import { searchByQuery, calculateTop3Avg } from "../services/vector.service.js";
+import {
+  isOwner, getAiHistory, saveAiMessages,
+  countAiTurns, getHistoryForCompression, saveSummaryAndPrune,
+  COMPRESS_THRESHOLD,
+} from "../../../db/chat.js";
+import { callLLMStream } from "../services/llm.service.js";
+
+/**
+ * 백그라운드 히스토리 압축
+ * 응답 후 비동기로 실행 — 응답 속도에 영향 없음
+ */
+async function compressHistoryIfNeeded(roomId) {
+  try {
+    const total = await countAiTurns(roomId);
+    if (total <= COMPRESS_THRESHOLD) return;
+
+    const { turns, ids } = await getHistoryForCompression(roomId);
+    if (!turns.length) return;
+
+    const historyText = turns
+      .map((t, i) => `[${i + 1}턴]\n사용자: ${t.user}\nAI: ${t.assistant}`)
+      .join("\n\n");
+
+    const summary = await callLLMStream(
+      [
+        {
+          role: "system",
+          content: "당신은 화재감식 전문 AI입니다. 아래 대화를 핵심 정보 중심으로 간결하게 요약하세요. 감식 결론, 주요 원인, 중요 수치는 반드시 포함하세요.",
+        },
+        {
+          role: "user",
+          content: `다음 화재감식 대화를 요약해주세요:\n\n${historyText}`,
+        },
+      ],
+      { maxTokens: 800, temperature: 0.1 }
+    );
+
+    await saveSummaryAndPrune(roomId, summary, ids);
+    console.log(`[chat] room ${roomId} 히스토리 압축 완료 (${ids.length}행 → 요약)`);
+  } catch (e) {
+    console.warn("[chat] compressHistory failed:", e?.message);
+  }
+}
 
 /**
  * POST /query handler
@@ -10,9 +53,11 @@ export async function handleQuery(req, res) {
   try {
     const {
       question,
+      room_id,
+      mem_id,
       match_count = 5,
       history = [],
-      max_new_tokens = 700,
+      max_new_tokens = 3000,
       temperature = 0.2,
       top_p = 0.9,
     } = req.body || {};
@@ -24,9 +69,15 @@ export async function handleQuery(req, res) {
       return res.status(413).json({ ok: false, error: "question too long" });
     }
 
-    const hist = Array.isArray(history) ? [...history] : [];
-    if (hist.length > 50) {
-      hist.splice(0, hist.length - 50);
+    // 채팅방 모드: room_id + mem_id 제공 시 DB 히스토리 사용
+    let hist;
+    if (room_id && mem_id) {
+      const owner = await isOwner(room_id, mem_id);
+      if (!owner) return res.status(403).json({ ok: false, error: "권한 없음" });
+      hist = await getAiHistory(room_id);
+    } else {
+      hist = Array.isArray(history) ? [...history] : [];
+      if (hist.length > 50) hist.splice(0, hist.length - 50);
     }
 
     const result = await runRag({
@@ -37,6 +88,14 @@ export async function handleQuery(req, res) {
       temperature,
       top_p,
     });
+
+    if (room_id && mem_id) {
+      await saveAiMessages(room_id, mem_id, question, result.answer).catch((e) =>
+        console.warn("[chat] saveAiMessages failed:", e?.message)
+      );
+      // 백그라운드 압축 (응답 후 비동기)
+      compressHistoryIfNeeded(room_id);
+    }
 
     return res.json({
       ok: true,
@@ -167,8 +226,10 @@ export async function handleQueryStream(req, res) {
   try {
     const {
       question,
+      room_id,
+      mem_id,
       history = [],
-      max_new_tokens = 700,
+      max_new_tokens = 3000,
       temperature = 0.2,
       top_p = 0.9,
     } = req.body || {};
@@ -182,22 +243,51 @@ export async function handleQueryStream(req, res) {
       return res.end();
     }
 
-    const hist = Array.isArray(history) ? [...history] : [];
-    if (hist.length > 50) hist.splice(0, hist.length - 50);
+    // 채팅방 모드: room_id + mem_id 제공 시 DB 히스토리 사용
+    let hist;
+    if (room_id && mem_id) {
+      const owner = await isOwner(room_id, mem_id);
+      if (!owner) {
+        res.write(`event: error\ndata: ${JSON.stringify({ error: "권한 없음" })}\n\n`);
+        return res.end();
+      }
+      hist = await getAiHistory(room_id);
+    } else {
+      hist = Array.isArray(history) ? [...history] : [];
+      if (hist.length > 50) hist.splice(0, hist.length - 50);
+    }
 
-    const { sources, rag_mode } = await runRagStream({
-      question,
-      history: hist,
-      max_new_tokens,
-      temperature,
-      top_p,
-      onToken: (token) => {
-        res.write(`data: ${JSON.stringify({ token })}\n\n`);
-      },
-    });
+    const heartbeat = setInterval(() => {
+      if (!res.writableEnded) res.write(": ping\n\n");
+    }, 10000);
 
-    res.write(`event: done\ndata: ${JSON.stringify({ sources, rag_mode })}\n\n`);
-    res.end();
+    try {
+      let fullAnswer = "";
+      const { sources, rag_mode } = await runRagStream({
+        question,
+        history: hist,
+        max_new_tokens,
+        temperature,
+        top_p,
+        onToken: (token) => {
+          fullAnswer += token;
+          res.write(`data: ${JSON.stringify({ token })}\n\n`);
+        },
+      });
+
+      if (room_id && mem_id) {
+        await saveAiMessages(room_id, mem_id, question, fullAnswer).catch((e) =>
+          console.warn("[chat] saveAiMessages failed:", e?.message)
+        );
+        // 백그라운드 압축 (응답 후 비동기)
+        compressHistoryIfNeeded(room_id);
+      }
+
+      res.write(`event: done\ndata: ${JSON.stringify({ sources, rag_mode })}\n\n`);
+      res.end();
+    } finally {
+      clearInterval(heartbeat);
+    }
   } catch (e) {
     console.error("/query/stream error:", e);
     if (!res.writableEnded) {
