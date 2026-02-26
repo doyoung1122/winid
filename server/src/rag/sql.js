@@ -42,7 +42,17 @@ stat_type 값 & region 규칙:
   범위:   WHERE fire_date BETWEEN 'start' AND 'end'
 
 시도별 화재 건수: stat_type='시도별', region=시도명
-전국 통계:        해당 stat_type AND region='전국'`.trim();
+전국 통계:        해당 stat_type AND region='전국'
+
+[집계 쿼리 규칙 - 중요]
+- "N년 전체", "N년 합계", "총 몇 건" 등 기간 합산 질문 → 반드시 SUM() 사용
+  예) SELECT SUM(fire_count) as 화재건수, SUM(death_count) as 사망자, SUM(injury_count) as 부상자, SUM(damage_amount) as 재산피해
+      FROM vfs_data_api WHERE YEAR(fire_date)=2010 AND region='충청남도' AND stat_type='시도별'
+- stat_type별 분류 현황 → GROUP BY category_main + SUM()
+  예) SELECT category_main, SUM(fire_count) as 화재건수 FROM vfs_data_api
+      WHERE YEAR(fire_date)=2010 AND stat_type='발화요인' AND region='전국'
+      GROUP BY category_main ORDER BY 화재건수 DESC
+- 개별 날짜 상세 조회만 LIMIT 사용 (기간 합산에 LIMIT 사용 금지)`.trim();
 
 const CASE_SCHEMA = `
 [테이블: vfs_data_csv] 개별 화재 사례 (2019~2023, 총 194,105건)
@@ -125,7 +135,8 @@ export async function generateSQL(question, intent, entities) {
   // 사례 쿼리: "오늘/어제" 같은 날짜는 현재 사건 발생 시점이며 유사 사례 검색 필터로 쓰지 않음
   // entities.year는 "2021년 이천 화재" 같은 명시적 연도는 필터로 사용
   if (entities.region)   hints.push(`지역: "${entities.region}"`);
-  if (entities.year)     hints.push(`연도: ${entities.year}`);
+  if (entities.year && intent === "stats") hints.push(`연도: ${entities.year} → 연간 합산이므로 SUM(fire_count), SUM(death_count), SUM(injury_count), SUM(damage_amount) 집계 쿼리 사용 (LIMIT 없이)`);
+  if (entities.year && intent === "case")  hints.push(`연도: ${entities.year}`);
   if (entities.building) hints.push(`건물/장소 유형: "${entities.building}"`);
   const hintStr = hints.length > 0 ? `\n[추출된 조건]\n${hints.join("\n")}\n` : "";
 
@@ -239,6 +250,11 @@ export function formatSQLResults(rows, intent) {
 }
 
 function isAggregateResult(keys) {
+  const RAW_COLS = ["id", "fire_date", "stat_type", "region", "category_main",
+                    "year", "month", "day", "report_no", "fire_type"];
+  const hasRawCols = RAW_COLS.some((c) => keys.includes(c));
+  // raw 컬럼이 없으면 SUM/GROUP BY 결과로 판단 (한국어 별칭 포함)
+  if (!hasRawCols) return true;
   return (
     keys.some((k) => /^(count|total|sum|cnt|avg)/i.test(k)) &&
     !keys.includes("id") &&
@@ -254,7 +270,7 @@ function formatStats(rows) {
     const lines = ["[집계 결과]"];
     for (const row of rows) {
       const formatted = Object.entries(row).map(([k, v]) => {
-        if (/damage/i.test(k) && v) return `${k}: ${fmtMoney(v)}`;
+        if ((/damage|피해액|재산피해/i.test(k)) && v) return `${k}: ${fmtMoney(v)}`;
         return `${k}: ${v}`;
       });
       lines.push("- " + formatted.join(" | "));
@@ -296,7 +312,7 @@ function formatCases(rows) {
     const lines = ["[집계 결과]"];
     for (const row of rows) {
       const formatted = Object.entries(row).map(([k, v]) => {
-        if (/damage/i.test(k) && v) return `${k}: ${fmtMoney(v)}`;
+        if ((/damage|피해액|재산피해/i.test(k)) && v) return `${k}: ${fmtMoney(v)}`;
         return `${k}: ${v}`;
       });
       lines.push("- " + formatted.join(" | "));
