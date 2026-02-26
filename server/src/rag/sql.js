@@ -171,7 +171,8 @@ ${caseExtraRules}- 반드시 JSON 형식으로만 응답: {"sql":"...", "note":"
 
   const { sql } = JSON.parse(m[0]);
   if (!sql) throw new Error("SQL 필드 없음");
-  return validateSQL(sql.trim());
+  const { sql: finalSql, note } = validateSQL(sql.trim());
+  return { sql: finalSql, note };
 }
 
 function validateSQL(sql) {
@@ -183,6 +184,20 @@ function validateSQL(sql) {
   }
   const hasAgg = /\b(COUNT|SUM|AVG|MIN|MAX|GROUP\s+BY)\b/i.test(clean);
   const isCaseTbl = /FROM\s+vfs_data_csv\b/i.test(clean);
+
+  // vfs_data_api: '전국'만인 stat_type에 region 필터가 있으면 '전국'으로 교정
+  const NATIONAL_ONLY = ["건물구조","발화열원","발화요인","발화장소","발화지점",
+                         "선박항공기","임야","차량발화지점","최초착화물","화재장소(전국)"];
+  let nationalNote = "";
+  if (!isCaseTbl) {
+    const stMatch = clean.match(/stat_type\s*=\s*'([^']+)'/i);
+    const regionMatch = clean.match(/region\s*=\s*'([^']+)'/i);
+    if (stMatch && NATIONAL_ONLY.includes(stMatch[1]) && regionMatch && regionMatch[1] !== "전국") {
+      clean = clean.replace(/AND\s+region\s*=\s*'[^']+'/gi, "AND region='전국'")
+                   .replace(/region\s*=\s*'[^']+'\s+AND/gi, "region='전국' AND");
+      nationalNote = `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`;
+    }
+  }
 
   // vfs_data_csv는 2019~2023만 존재: 2024년 이후 year 필터 자동 제거
   if (isCaseTbl) {
@@ -199,14 +214,14 @@ function validateSQL(sql) {
   if (!hasAgg && isCaseTbl && !/\bORDER\s+BY\b/i.test(clean)) {
     const orderClause = "ORDER BY damage_amount DESC, death_count DESC";
     if (/\bLIMIT\b/i.test(clean)) {
-      return clean.replace(/\bLIMIT\b/i, `${orderClause} LIMIT`);
+      return { sql: clean.replace(/\bLIMIT\b/i, `${orderClause} LIMIT`), note: nationalNote };
     }
-    return clean + ` ${orderClause} LIMIT 20`;
+    return { sql: clean + ` ${orderClause} LIMIT 20`, note: nationalNote };
   }
 
   // 집계 없는 쿼리에 LIMIT 미지정 시 자동 추가
-  if (!hasAgg && !/\bLIMIT\b/i.test(clean)) return clean + " LIMIT 20";
-  return clean;
+  if (!hasAgg && !/\bLIMIT\b/i.test(clean)) return { sql: clean + " LIMIT 20", note: nationalNote };
+  return { sql: clean, note: nationalNote };
 }
 
 // =========================
@@ -250,11 +265,8 @@ export function formatSQLResults(rows, intent) {
 }
 
 function isAggregateResult(keys) {
-  const RAW_COLS = ["id", "fire_date", "stat_type", "region", "category_main",
-                    "year", "month", "day", "report_no", "fire_type"];
-  const hasRawCols = RAW_COLS.some((c) => keys.includes(c));
-  // raw 컬럼이 없으면 SUM/GROUP BY 결과로 판단 (한국어 별칭 포함)
-  if (!hasRawCols) return true;
+  // 한국어 키가 있으면 SUM/GROUP BY 별칭 결과로 판단
+  if (keys.some((k) => /[ㄱ-힣]/.test(k))) return true;
   return (
     keys.some((k) => /^(count|total|sum|cnt|avg)/i.test(k)) &&
     !keys.includes("id") &&
@@ -356,10 +368,22 @@ function formatCases(rows) {
 // 메인 export
 // =========================
 
+const NATIONAL_ONLY_TYPES = new Set(["건물구조","발화열원","발화요인","발화장소","발화지점",
+  "선박항공기","임야","차량발화지점","최초착화물","화재장소(전국)"]);
+
 export async function queryBySQL(question, intent, entities) {
-  const sql = await generateSQL(question, intent, entities);
+  const { sql, note: validateNote } = await generateSQL(question, intent, entities);
   console.log(`[sql] ${intent}: ${sql}`);
   const rows = await executeSQL(sql);
-  const context = formatSQLResults(rows, intent);
-  return { sql, rowCount: rows.length, context };
+  const rawContext = formatSQLResults(rows, intent);
+  if (!rawContext) return { sql, rowCount: rows.length, context: null };
+
+  // 전국 통계 유형인데 지역 질문이 들어온 경우 안내 메모 자동 추가
+  const stMatch = sql.match(/stat_type\s*=\s*'([^']+)'/i);
+  const isNationalType = stMatch && NATIONAL_ONLY_TYPES.has(stMatch[1]);
+  const autoNote = (isNationalType && entities.region)
+    ? `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`
+    : validateNote;
+
+  return { sql, rowCount: rows.length, context: autoNote + rawContext };
 }
