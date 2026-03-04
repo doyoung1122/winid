@@ -187,7 +187,8 @@ ${schema}
 
 [생성 규칙]
 - SELECT 쿼리만 허용
-- 집계 없는 개별 행 조회는 LIMIT 3
+- vfs_data_csv 개별 사례 조회는 LIMIT 3 (피해 규모 기준 상위 3건)
+- vfs_data_api 통계 조회는 LIMIT 불필요 (전 시도 결과 반환)
 - 한국어 컬럼값은 위 목록의 정확한 문자열 사용
 ${caseExtraRules}- 반드시 JSON 형식으로만 응답: {"sql":"...", "note":"..."}`;
 
@@ -257,9 +258,19 @@ function validateSQL(sql) {
     }
   }
 
-  // vfs_data_api: stat_type IN (...) → '시도별' 단일값으로 교정 (LLM이 복수 stat_type 생성 방지)
+  // vfs_data_api: stat_type IN (...) → '시도별' 단일값으로 교정
+  // '화재장소(전국)' 같이 값 안에 괄호가 있어 단순 regex 오동작 → 균형 괄호 탐색으로 처리
   if (!isCaseTbl && /\bstat_type\s+IN\s*\(/i.test(clean)) {
-    clean = clean.replace(/\bstat_type\s+IN\s*\([^)]*\)/gi, "stat_type='시도별'");
+    const inMatch = clean.match(/\bstat_type\s+IN\s*\(/i);
+    const start = inMatch.index;
+    const openPos = start + inMatch[0].length - 1; // '(' 위치
+    let depth = 1, pos = openPos + 1;
+    while (pos < clean.length && depth > 0) {
+      if (clean[pos] === '(') depth++;
+      else if (clean[pos] === ')') depth--;
+      pos++;
+    }
+    clean = clean.slice(0, start) + "stat_type='시도별'" + clean.slice(pos);
   }
 
   // vfs_data_api: stat_type과 region 조합 교정
@@ -317,8 +328,12 @@ function validateSQL(sql) {
     return { sql: clean + ` ${orderClause} LIMIT 3`, note: nationalNote, isLimited: true };
   }
 
-  // 집계 없는 쿼리에 LIMIT 미지정 시 자동 추가
-  if (!hasAgg && !/\bLIMIT\b/i.test(clean)) return { sql: clean + " LIMIT 3", note: nationalNote, isLimited: true };
+  // vfs_data_api(통계): LIMIT 없으면 50 (전국 시도 17개 + 여유)
+  // vfs_data_csv(사례): LIMIT 없으면 3 (개별 사례는 위에서 이미 처리됨)
+  if (!hasAgg && !/\bLIMIT\b/i.test(clean)) {
+    const lim = isCaseTbl ? 3 : 50;
+    return { sql: clean + ` LIMIT ${lim}`, note: nationalNote, isLimited: true };
+  }
   return { sql: clean, note: nationalNote, isLimited: false };
 }
 
