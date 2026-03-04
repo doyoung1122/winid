@@ -70,7 +70,7 @@ export const MAX_CHUNKS_EMB = Number(process.env.MAX_CHUNKS_EMB || 0);
 // RAG Search Thresholds
 // =========================
 export const RETRIEVE_MIN = Number(process.env.RETRIEVE_MIN || 0.35);
-export const USE_AS_CTX_MIN = Number(process.env.USE_AS_CTX_MIN || 0.60);
+export const USE_AS_CTX_MIN = Number(process.env.USE_AS_CTX_MIN || 0.65);
 export const MIN_TOP3_AVG = Number(process.env.MIN_TOP3_AVG || 0.55);
 export const TEXT_K = Number(process.env.TEXT_K || 5);
 export const TABLE_K = Number(process.env.TABLE_K || 10);
