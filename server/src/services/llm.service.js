@@ -1,3 +1,4 @@
+import { readFile } from "fs/promises";
 import { LLM_URL, LLM_MODEL } from "../config/env.js";
 
 /**
@@ -38,7 +39,7 @@ export async function callLLM(messages, options = {}) {
  * @returns {Promise<string>} Accumulated response text
  */
 export async function callLLMStream(messages, options = {}) {
-  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9, enableThinking = false } = options;
+  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9, enableThinking = false, repetitionPenalty = 1.15 } = options;
 
   const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
     method: "POST",
@@ -52,6 +53,7 @@ export async function callLLMStream(messages, options = {}) {
       temperature,
       max_tokens: maxTokens,
       top_p,
+      repetition_penalty: repetitionPenalty,
       stream: true,
       chat_template_kwargs: { enable_thinking: enableThinking },
     }),
@@ -100,7 +102,7 @@ async function readSSEToText(body) {
  * @returns {Promise<string>} Accumulated response text
  */
 export async function callLLMStreamTokens(messages, options = {}, onToken) {
-  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9, enableThinking = false } = options;
+  const { temperature = 0.7, maxTokens = 2048, top_p = 0.9, enableThinking = false, repetitionPenalty = 1.15 } = options;
 
   const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
     method: "POST",
@@ -114,6 +116,7 @@ export async function callLLMStreamTokens(messages, options = {}, onToken) {
       temperature,
       max_tokens: maxTokens,
       top_p,
+      repetition_penalty: repetitionPenalty,
       stream: true,
       chat_template_kwargs: { enable_thinking: enableThinking },
     }),
@@ -180,10 +183,55 @@ export function withTimeout(promise, ms = 30000, tag = "req") {
   ]);
 }
 
+/**
+ * Qwen3-VL로 이미지를 설명하는 함수 (화재조사 문서 이미지 전용)
+ * @param {string} imagePath - 절대 경로
+ * @param {string} docContext - 문서 제목/맥락 (프롬프트 보강용)
+ * @returns {Promise<string>} 한국어 설명 텍스트
+ */
+export async function describeImage(imagePath, docContext = "") {
+  const imageBuffer = await readFile(imagePath);
+  const b64 = imageBuffer.toString("base64");
+  const ext = imagePath.toLowerCase().endsWith(".png") ? "png" : "jpeg";
+
+  const prompt = docContext
+    ? `이 이미지는 화재조사 문서("${docContext}")에서 추출된 것입니다. 표·도표·사진·도면 중 어떤 형태인지 파악하고, 화재조사에 관련된 핵심 내용을 간결하게 설명해주세요. (4~6문장)`
+    : `이 이미지의 유형(표, 도표, 사진, 도면 등)을 파악하고 화재조사와 관련된 핵심 내용을 설명해주세요.`;
+
+  const response = await fetch(`${LLM_URL}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: LLM_MODEL,
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: `data:image/${ext};base64,${b64}` } },
+            { type: "text", text: prompt },
+          ],
+        },
+      ],
+      max_tokens: 300,
+      temperature: 0.2,
+      chat_template_kwargs: { enable_thinking: false },
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`VLM describe failed: ${response.status} - ${err}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0]?.message?.content?.trim() || "";
+}
+
 export default {
   callLLM,
   callLLMStream,
   callLLMStreamTokens,
   checkLLMHealth,
   withTimeout,
+  describeImage,
 };

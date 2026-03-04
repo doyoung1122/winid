@@ -41,13 +41,30 @@ stat_type 값 & region 규칙:
   특정년: WHERE YEAR(fire_date)=YYYY
   범위:   WHERE fire_date BETWEEN 'start' AND 'end'
 
-시도별 화재 건수: stat_type='시도별', region=시도명
-전국 통계:        해당 stat_type AND region='전국'
+시도별 화재 건수: stat_type='시도별', region=해당 시도명 (예: '경기도')
+전국 총계:        stat_type='시도별' (region 조건 없이 모든 시도 SUM = 전국 합계)
+전국 분류 통계:   region='전국'만인 stat_type들 (발화요인, 발화장소, 건물구조 등)
+
+[필수 규칙] vfs_data_api 쿼리는 반드시 stat_type 조건을 포함해야 합니다.
+stat_type 없이 조회하면 9개 stat_type이 모두 합산되어 수치가 최대 9배 부풀어 오릅니다.
+
+[stat_type='시도별' 사용 규칙]
+- region='전국' 행은 존재하지 않습니다. "전국" 통계 질문에 region='전국' 사용 금지.
+- 전국 합계: stat_type='시도별' + region 조건 없이 → 16개 시도 합산 = 전국 합계
+  예) SELECT SUM(fire_count) AS 화재건수 FROM vfs_data_api WHERE stat_type='시도별' AND YEAR(fire_date)=2024
+- 특정 시도: stat_type='시도별' AND region='경기도'
+
+[중요 제약] vfs_data_api는 건물유형(아파트, 공장 등) 필터가 없습니다.
+"아파트", "공장", "주택" 등 건물유형이 질문에 포함되더라도
+stat_type='시도별' 또는 '화재장소(시도)'로 조회하고,
+건물유형 조건은 SQL에 추가하지 마세요.
 
 [집계 쿼리 규칙 - 중요]
 - "N년 전체", "N년 합계", "총 몇 건" 등 기간 합산 질문 → 반드시 SUM() 사용
   예) SELECT SUM(fire_count) as 화재건수, SUM(death_count) as 사망자, SUM(injury_count) as 부상자, SUM(damage_amount) as 재산피해
       FROM vfs_data_api WHERE YEAR(fire_date)=2010 AND region='충청남도' AND stat_type='시도별'
+- 전국 연도별 추이: SELECT YEAR(fire_date) AS 연도, SUM(fire_count) AS 화재건수, SUM(death_count) AS 사망자, SUM(injury_count) AS 부상자, SUM(damage_amount) AS 재산피해 FROM vfs_data_api WHERE stat_type='시도별' GROUP BY YEAR(fire_date) ORDER BY 연도 DESC
+- 전국 월별 추이: SELECT YEAR(fire_date) AS 연도, MONTH(fire_date) AS 월, SUM(fire_count) AS 화재건수, SUM(death_count) AS 사망자, SUM(injury_count) AS 부상자, SUM(damage_amount) AS 재산피해 FROM vfs_data_api WHERE stat_type='시도별' GROUP BY YEAR(fire_date), MONTH(fire_date) ORDER BY 연도, 월
 - stat_type별 분류 현황 → GROUP BY category_main + SUM()
   예) SELECT category_main, SUM(fire_count) as 화재건수 FROM vfs_data_api
       WHERE YEAR(fire_date)=2010 AND stat_type='발화요인' AND region='전국'
@@ -107,17 +124,23 @@ const CASE_SCHEMA = `
 
 [쿼리 가이드]
   사례 건수/집계: COUNT(*), GROUP BY 사용
-  개별 사례 조회: LIMIT 20 이하, ORDER BY damage_amount DESC, death_count DESC 권장
+  개별 사례 조회: LIMIT 3, ORDER BY damage_amount DESC, death_count DESC 권장
   건물용도 필터:  location_main, location_mid 사용 (building_type은 구조 방식)
   발화요인 필터:  cause_main='부주의'
 
 [district 값 규칙]
   district는 반드시 행정 단위 접미사 포함:
-  시: '이천시','성남시','수원시','화성시','용인시' 등
+  시: '이천시','성남시','화성시','용인시' 등
   군: '양평군','가평군' 등
   구: '강남구','강서구' 등
   예: 사용자가 "이천"이라고 하면 → district='이천시'
-  예: 사용자가 "강남"이라고 하면 → district='강남구'`.trim();
+  예: 사용자가 "강남"이라고 하면 → district='강남구'
+
+  [중요] 시(市) 단위 도시는 district 컬럼에 '수원시 영통구'처럼 구 단위까지 포함될 수 있습니다.
+  특히 고양시·성남시·수원시·안산시·안양시·용인시·전주시·창원시·천안시·청주시·포항시는
+  반드시 district LIKE '도시명%' 형태로 조회하세요.
+  그 외 시(市)도 안전하게 LIKE '도시명%' 사용을 권장합니다.
+  군(郡)·구(區)는 = 그대로 사용 가능합니다.`.trim();
 
 // =========================
 // SQL 생성
@@ -125,17 +148,31 @@ const CASE_SCHEMA = `
 
 export async function generateSQL(question, intent, entities) {
   const schema = intent === "stats" ? STATS_SCHEMA : CASE_SCHEMA;
-  const today = new Date().toISOString().slice(0, 10);
 
   const hints = [];
   if (intent === "stats") {
-    // 통계 쿼리: 날짜는 조회 필터로 사용
-    if (entities.date_ref) hints.push(`날짜(이미 변환됨): "${entities.date_ref}"  (오늘: ${today})`);
+    if (entities.date_ref) {
+      // date_ref를 SQL WHERE 조건으로 직접 변환 (LLM이 날짜 계산하지 않도록)
+      const dr = entities.date_ref;
+      let dateCond;
+      if (dr.includes("~")) {
+        const [s, e] = dr.split("~");
+        dateCond = `fire_date BETWEEN '${s}' AND '${e}'`;
+      } else if (dr.length === 7) {
+        dateCond = `YEAR(fire_date)=${dr.slice(0,4)} AND MONTH(fire_date)=${parseInt(dr.slice(5,7))}`;
+      } else {
+        dateCond = `fire_date='${dr}'`;
+      }
+      hints.push(`날짜 WHERE 조건 (반드시 이 조건을 그대로 사용): ${dateCond}`);
+    } else {
+      hints.push(`날짜 조건 없음 → 연도별 집계로 전체 추이 반환. 전국 추이 예시: SELECT YEAR(fire_date) AS 연도, SUM(fire_count) AS 화재건수, SUM(death_count) AS 사망자, SUM(injury_count) AS 부상자, SUM(damage_amount) AS 재산피해 FROM vfs_data_api WHERE stat_type='시도별' GROUP BY YEAR(fire_date) ORDER BY 연도 DESC (특정 시도라면 AND region='시도명' 추가)`);
+    }
   }
   // 사례 쿼리: "오늘/어제" 같은 날짜는 현재 사건 발생 시점이며 유사 사례 검색 필터로 쓰지 않음
   // entities.year는 "2021년 이천 화재" 같은 명시적 연도는 필터로 사용
-  if (entities.region)   hints.push(`지역: "${entities.region}"`);
-  if (entities.year && intent === "stats") hints.push(`연도: ${entities.year} → 연간 합산이므로 SUM(fire_count), SUM(death_count), SUM(injury_count), SUM(damage_amount) 집계 쿼리 사용 (LIMIT 없이)`);
+  if (entities.region)   hints.push(`시도: "${entities.region}"`);
+  if (entities.district) hints.push(`시군구: "${entities.district}"`);
+  if (entities.year && intent === "stats") hints.push(`연도: ${entities.year} → 반드시 stat_type='시도별' 포함. 전국 합산: WHERE stat_type='시도별' AND YEAR(fire_date)=${entities.year}. 월별 요약 시: GROUP BY MONTH(fire_date). 연도 합산 시: SUM() 집계 (LIMIT 없이)`);
   if (entities.year && intent === "case")  hints.push(`연도: ${entities.year}`);
   if (entities.building) hints.push(`건물/장소 유형: "${entities.building}"`);
   const hintStr = hints.length > 0 ? `\n[추출된 조건]\n${hints.join("\n")}\n` : "";
@@ -150,7 +187,7 @@ ${schema}
 
 [생성 규칙]
 - SELECT 쿼리만 허용
-- 집계 없는 개별 행 조회는 LIMIT 20 이하
+- 집계 없는 개별 행 조회는 LIMIT 3
 - 한국어 컬럼값은 위 목록의 정확한 문자열 사용
 ${caseExtraRules}- 반드시 JSON 형식으로만 응답: {"sql":"...", "note":"..."}`;
 
@@ -171,32 +208,72 @@ ${caseExtraRules}- 반드시 JSON 형식으로만 응답: {"sql":"...", "note":"
 
   const { sql } = JSON.parse(m[0]);
   if (!sql) throw new Error("SQL 필드 없음");
-  const { sql: finalSql, note } = validateSQL(sql.trim());
-  return { sql: finalSql, note };
+  const { sql: finalSql, note, isLimited } = validateSQL(sql.trim());
+  return { sql: finalSql, note, isLimited };
 }
+
+const ALLOWED_TABLES = new Set(["vfs_data_api", "vfs_data_csv"]);
 
 function validateSQL(sql) {
   // 끝의 세미콜론 제거
   let clean = sql.replace(/;+\s*$/, "").trim();
-  if (!/^SELECT\s/i.test(clean)) throw new Error("SELECT 쿼리만 허용");
+  if (!/^SELECT\s/i.test(clean)) throw new Error("허용되지 않은 접근입니다");
   if (/\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|CREATE|EXEC)\b/i.test(clean)) {
-    throw new Error("허용되지 않는 SQL 키워드");
+    throw new Error("허용되지 않은 접근입니다");
+  }
+  if (/\bUNION\b/i.test(clean)) throw new Error("허용되지 않은 접근입니다");
+  // 허용 테이블 외 접근 차단
+  const tables = [...clean.matchAll(/\bFROM\s+(\w+)/gi)].map(m => m[1].toLowerCase());
+  const subTables = [...clean.matchAll(/\bJOIN\s+(\w+)/gi)].map(m => m[1].toLowerCase());
+  for (const tbl of [...tables, ...subTables]) {
+    if (!ALLOWED_TABLES.has(tbl)) throw new Error("허용되지 않은 접근입니다");
   }
   const hasAgg = /\b(COUNT|SUM|AVG|MIN|MAX|GROUP\s+BY)\b/i.test(clean);
   const isCaseTbl = /FROM\s+vfs_data_csv\b/i.test(clean);
 
-  // vfs_data_api: '전국'만인 stat_type에 region 필터가 있으면 '전국'으로 교정
+  // vfs_data_api: stat_type 없으면 기본값 '시도별' 자동 주입 (중복 집계 방지)
+  if (!isCaseTbl && !/\bstat_type\s*=/i.test(clean)) {
+    if (/\bWHERE\b/i.test(clean)) {
+      clean = clean.replace(/\bWHERE\b/i, "WHERE stat_type='시도별' AND");
+    } else {
+      clean = clean.replace(/\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b/i, "WHERE stat_type='시도별' $1");
+      if (!/\bWHERE\b/i.test(clean)) clean += " WHERE stat_type='시도별'";
+    }
+  }
+
+  // vfs_data_api: stat_type과 region 조합 교정
   const NATIONAL_ONLY = ["건물구조","발화열원","발화요인","발화장소","발화지점",
                          "선박항공기","임야","차량발화지점","최초착화물","화재장소(전국)"];
   let nationalNote = "";
   if (!isCaseTbl) {
     const stMatch = clean.match(/stat_type\s*=\s*'([^']+)'/i);
     const regionMatch = clean.match(/region\s*=\s*'([^']+)'/i);
-    if (stMatch && NATIONAL_ONLY.includes(stMatch[1]) && regionMatch && regionMatch[1] !== "전국") {
-      clean = clean.replace(/AND\s+region\s*=\s*'[^']+'/gi, "AND region='전국'")
-                   .replace(/region\s*=\s*'[^']+'\s+AND/gi, "region='전국' AND");
-      nationalNote = `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`;
+    if (stMatch) {
+      // 시도별: region='전국'은 존재하지 않으므로 region 조건 제거
+      if (stMatch[1] === "시도별" && regionMatch && regionMatch[1] === "전국") {
+        clean = clean.replace(/\bAND\s+region\s*=\s*'전국'/gi, "")
+                     .replace(/\bregion\s*=\s*'전국'\s+AND\b/gi, "")
+                     .replace(/\bWHERE\s+region\s*=\s*'전국'\b/gi, "WHERE 1=1")
+                     .trim();
+        nationalNote = `[안내: 전국 합계는 시도별 데이터를 합산하여 계산됩니다]\n`;
+      }
+      // 전국 전용 stat_type에 시도 region이 있으면 '전국'으로 교정
+      else if (NATIONAL_ONLY.includes(stMatch[1]) && regionMatch && regionMatch[1] !== "전국") {
+        clean = clean.replace(/AND\s+region\s*=\s*'[^']+'/gi, "AND region='전국'")
+                     .replace(/region\s*=\s*'[^']+'\s+AND/gi, "region='전국' AND");
+        nationalNote = `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`;
+      }
     }
+  }
+
+  // vfs_data_csv: 전북특별자치도 명칭 교정 (vfs_data_api는 전라북도 유지)
+  if (isCaseTbl) {
+    clean = clean.replace(/region\s*=\s*'전라북도'/g, "region='전북특별자치도'");
+  }
+
+  // vfs_data_csv: '시'로 끝나는 district는 구 단위 포함 가능하므로 LIKE 자동 적용
+  if (isCaseTbl) {
+    clean = clean.replace(/district\s*=\s*'([^']+시)'/gi, "district LIKE '$1%'");
   }
 
   // vfs_data_csv는 2019~2023만 존재: 2024년 이후 year 필터 자동 제거
@@ -214,14 +291,14 @@ function validateSQL(sql) {
   if (!hasAgg && isCaseTbl && !/\bORDER\s+BY\b/i.test(clean)) {
     const orderClause = "ORDER BY damage_amount DESC, death_count DESC";
     if (/\bLIMIT\b/i.test(clean)) {
-      return { sql: clean.replace(/\bLIMIT\b/i, `${orderClause} LIMIT`), note: nationalNote };
+      return { sql: clean.replace(/\bLIMIT\b/i, `${orderClause} LIMIT`), note: nationalNote, isLimited: true };
     }
-    return { sql: clean + ` ${orderClause} LIMIT 20`, note: nationalNote };
+    return { sql: clean + ` ${orderClause} LIMIT 3`, note: nationalNote, isLimited: true };
   }
 
   // 집계 없는 쿼리에 LIMIT 미지정 시 자동 추가
-  if (!hasAgg && !/\bLIMIT\b/i.test(clean)) return { sql: clean + " LIMIT 20", note: nationalNote };
-  return { sql: clean, note: nationalNote };
+  if (!hasAgg && !/\bLIMIT\b/i.test(clean)) return { sql: clean + " LIMIT 3", note: nationalNote, isLimited: true };
+  return { sql: clean, note: nationalNote, isLimited: false };
 }
 
 // =========================
@@ -372,7 +449,7 @@ const NATIONAL_ONLY_TYPES = new Set(["건물구조","발화열원","발화요인
   "선박항공기","임야","차량발화지점","최초착화물","화재장소(전국)"]);
 
 export async function queryBySQL(question, intent, entities) {
-  const { sql, note: validateNote } = await generateSQL(question, intent, entities);
+  const { sql, note: validateNote, isLimited } = await generateSQL(question, intent, entities);
   console.log(`[sql] ${intent}: ${sql}`);
   const rows = await executeSQL(sql);
   const rawContext = formatSQLResults(rows, intent);
@@ -385,12 +462,31 @@ export async function queryBySQL(question, intent, entities) {
     ? `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`
     : validateNote;
 
+  // LIMIT 20 자동 적용된 경우: 전체 건수 COUNT 조회
+  let totalCountNote = "";
+  if (isLimited && rows.length > 0) {
+    try {
+      const countSql = sql
+        .replace(/\bORDER\s+BY\b.*/i, "")
+        .replace(/\bLIMIT\s+\d+/i, "")
+        .trim();
+      const countRows = await executeSQL(`SELECT COUNT(*) as total FROM (${countSql}) t`);
+      const total = countRows[0]?.total ?? rows.length;
+      if (total > rows.length) {
+        totalCountNote = `[안내: 전체 ${total}건 중 피해 규모 기준 상위 ${rows.length}건을 표시합니다]\n`;
+      }
+    } catch (_) { /* COUNT 실패 시 무시 */ }
+  }
+
   // 조회 조건 헤더 추가 (LLM이 어떤 데이터인지 인식하도록)
   const condParts = [];
   if (entities.year)   condParts.push(`${entities.year}년`);
-  if (entities.region) condParts.push(entities.region);
-  if (entities.date_ref && intent === "stats") condParts.push(`날짜: ${entities.date_ref}`);
+  const loc = [entities.region, entities.district].filter(Boolean).join(" ");
+  if (loc) condParts.push(loc);
+  if (entities.date_ref && intent === "stats") {
+    condParts.push(`날짜: ${entities.date_ref}`);
+  }
   const condHeader = condParts.length > 0 ? `[조회 조건: ${condParts.join(" ")}]\n` : "";
 
-  return { sql, rowCount: rows.length, context: condHeader + autoNote + rawContext };
+  return { sql, rowCount: rows.length, context: condHeader + autoNote + totalCountNote + rawContext };
 }
