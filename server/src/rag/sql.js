@@ -214,9 +214,24 @@ ${caseExtraRules}- 반드시 JSON 형식으로만 응답: {"sql":"...", "note":"
 
 const ALLOWED_TABLES = new Set(["vfs_data_api", "vfs_data_csv"]);
 
+function normalizeSQL(sql) {
+  // 1) 유니코드 정규화 (전각문자 → ASCII: ＵＮＩＯＮ → UNION)
+  let s = sql.normalize("NFKC");
+  // 2) null byte 제거
+  s = s.replace(/\0/g, "");
+  // 3) SQL 주석 제거 (/* */ 와 -- 방식)
+  s = s.replace(/\/\*[\s\S]*?\*\//g, " ");
+  s = s.replace(/--[^\n]*/g, " ");
+  // 4) 연속 공백 정리
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
+
 function validateSQL(sql) {
+  // 인코딩/유니코드 정규화 후 검증
+  let clean = normalizeSQL(sql);
   // 끝의 세미콜론 제거
-  let clean = sql.replace(/;+\s*$/, "").trim();
+  clean = clean.replace(/;+\s*$/, "").trim();
   if (!/^SELECT\s/i.test(clean)) throw new Error("허용되지 않은 접근입니다");
   if (/\b(DROP|DELETE|UPDATE|INSERT|ALTER|TRUNCATE|CREATE|EXEC)\b/i.test(clean)) {
     throw new Error("허용되지 않은 접근입니다");

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { askQueryStream, type SourceMeta } from "../lib/api";
+import { askQueryStream, fetchHistory, type SourceMeta } from "../lib/api";
 
 const API_BASE = (() => {
   const env = (import.meta as any).env?.VITE_API_URL as string | undefined;
@@ -34,6 +34,22 @@ export default function ChatView() {
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploadStatus, setUploadStatus] = useState<"idle" | "uploading" | "success" | "error">("idle");
   const [uploadMsg, setUploadMsg] = useState("");
+
+  // room_id + mem_id 있으면 페이지 로드 시 DB 히스토리 불러오기
+  useEffect(() => {
+    if (!room_id || !mem_id) return;
+    fetchHistory(room_id, mem_id)
+      .then((pairs) => {
+        console.log("[ChatView] fetchHistory pairs:", pairs.length, pairs);
+        if (!pairs.length) return;
+        const loaded: Turn[] = pairs.flatMap(({ user, assistant }) => [
+          { role: "user" as Role, content: user },
+          { role: "assistant" as Role, content: assistant },
+        ]);
+        setTurns(loaded);
+      })
+      .catch((e) => console.error("[ChatView] fetchHistory error:", e));
+  }, [room_id, mem_id]);
 
   useEffect(() => {
     scrollerRef.current?.scrollTo({ top: scrollerRef.current.scrollHeight, behavior: "smooth" });

@@ -62,13 +62,12 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
     command: >
-      --model QuixiAI/Qwen3-30B-A3B-AWQ
+      --model Qwen/Qwen3-VL-8B-Instruct
       --served-model-name qwen3
-      --quantization awq
-      --dtype half
+      --dtype auto
       --kv-cache-dtype fp8
-      --gpu-memory-utilization 0.85
-      --max-model-len 12288
+      --gpu-memory-utilization 0.88
+      --max-model-len 16384
       --enable-prefix-caching
       --host 0.0.0.0
       --port 8002

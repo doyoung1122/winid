@@ -83,6 +83,31 @@ export async function getAiHistory(roomId) {
 }
 
 // =========================
+// 화면 표시용 최근 메시지 조회 (페이지 로드 시)
+// =========================
+export async function getRecentAiMessages(roomId, limit = 20) {
+  const [rows] = await pool.query(
+    `SELECT sender_id, message FROM vfs_chat_message
+     WHERE room_id = ? AND msg_type = 'AI'
+     ORDER BY id DESC LIMIT ?`,
+    [roomId, limit * 2]
+  );
+  rows.reverse();
+
+  const turns = [];
+  let turn = {};
+  for (const row of rows) {
+    if (row.sender_id !== BOT_MEM_ID) {
+      turn = { user: row.message };
+    } else if (turn.user !== undefined) {
+      turns.push({ user: turn.user, assistant: row.message });
+      turn = {};
+    }
+  }
+  return turns;
+}
+
+// =========================
 // 압축 필요 여부 확인
 // =========================
 export async function countAiTurns(roomId) {

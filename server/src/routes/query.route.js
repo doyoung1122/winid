@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { handleQuery, handleQueryGet, handleQueryCompare, handleQueryStream } from "../handlers/query.handler.js";
+import { handleQuery, handleQueryGet, handleQueryCompare, handleQueryStream, handleGetHistory } from "../handlers/query.handler.js";
 
 const router = Router();
 
@@ -20,6 +20,12 @@ router.post("/query/compare", handleQueryCompare);
  * SSE streaming query endpoint
  */
 router.post("/query/stream", handleQueryStream);
+
+/**
+ * GET /history?room_id=X&mem_id=Y
+ * 채팅방 AI 대화 히스토리 조회 (화면 표시용)
+ */
+router.get("/history", handleGetHistory);
 
 /**
  * GET /query/:question

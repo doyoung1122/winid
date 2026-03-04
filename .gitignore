@@ -9,3 +9,7 @@ __pycache__/
 get-docker.sh
 llm_service/test.py
 .mcp.json
+uploads
+.claude
+catboost_info
+CLAUDE.md

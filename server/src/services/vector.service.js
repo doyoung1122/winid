@@ -1,7 +1,7 @@
 import * as mysqlRepo from "../../../db/repo.js";
 import * as chromaRepo from "../../../db/chroma.js";
 import { getEmbedding } from "./embedding.service.js";
-import { RETRIEVE_MIN, TEXT_K, VECTOR_BACKEND } from "../config/env.js";
+import { RETRIEVE_MIN, TEXT_K, TABLE_K, IMAGE_K, VECTOR_BACKEND } from "../config/env.js";
 
 // MySQL-only exports (doc_assets / doc_tables are MySQL-only features)
 export const { insertDocAsset, insertDocTable } = mysqlRepo;
@@ -87,7 +87,7 @@ export async function searchByQuery(queryText, options = {}) {
   const tableMatches = await repo.matchDocuments(qVec, {
     ...baseOpts,
     k: TABLE_K,
-    types: ["table_row"],
+    types: ["table"],
   });
 
   const imageMatches = await repo.matchDocuments(qVec, {

@@ -1,5 +1,9 @@
-export const API_BASE =
-  import.meta.env.VITE_API_URL || "http://localhost:8000";
+export const API_BASE = (() => {
+  const env = (import.meta as any).env?.VITE_API_URL as string | undefined;
+  if (env?.trim()) return env.trim().replace(/\/$/, "");
+  const { protocol, hostname } = window.location;
+  return `${protocol}//${hostname}:8000`;
+})();
 
 export async function uploadFile(file: File) {
   const form = new FormData();
@@ -53,6 +57,18 @@ export async function askQuery(
     answer: String(json?.answer ?? ""),
     sources: Array.isArray(json?.sources) ? json.sources : [],
   };
+}
+
+/** 채팅방 AI 히스토리 조회 (페이지 로드 시) */
+export async function fetchHistory(
+  room_id: string,
+  mem_id: string
+): Promise<{ user: string; assistant: string }[]> {
+  const url = `${API_BASE}/history?room_id=${encodeURIComponent(room_id)}&mem_id=${encodeURIComponent(mem_id)}`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  const json = await res.json().catch(() => ({}));
+  return Array.isArray(json?.history) ? json.history : [];
 }
 
 /** SSE 스트리밍 요청 (POST /query/stream) */

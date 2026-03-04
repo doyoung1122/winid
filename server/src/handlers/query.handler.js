@@ -3,6 +3,7 @@ import { searchByQuery, calculateTop3Avg } from "../services/vector.service.js";
 import {
   isOwner, getAiHistory, saveAiMessages,
   countAiTurns, getHistoryForCompression, saveSummaryAndPrune,
+  getRecentAiMessages,
   COMPRESS_THRESHOLD,
 } from "../../../db/chat.js";
 import { callLLMStream } from "../services/llm.service.js";
@@ -57,7 +58,7 @@ export async function handleQuery(req, res) {
       mem_id,
       match_count = 5,
       history = [],
-      max_new_tokens = 3000,
+      max_new_tokens = 2000,
       temperature = 0.2,
       top_p = 0.9,
     } = req.body || {};
@@ -234,6 +235,8 @@ export async function handleQueryStream(req, res) {
       top_p = 0.9,
     } = req.body || {};
 
+    console.log(`[stream] question="${question?.slice(0,30)}" room_id=${room_id} mem_id=${mem_id}`);
+
     if (!question) {
       res.write(`event: error\ndata: ${JSON.stringify({ error: "question required" })}\n\n`);
       return res.end();
@@ -297,4 +300,26 @@ export async function handleQueryStream(req, res) {
   }
 }
 
-export default { handleQuery, handleQueryGet, handleQueryCompare, handleQueryStream };
+/**
+ * GET /history?room_id=X&mem_id=Y
+ * 채팅방 AI 대화 히스토리 조회 (화면 표시용)
+ */
+export async function handleGetHistory(req, res) {
+  try {
+    const { room_id, mem_id } = req.query;
+    if (!room_id || !mem_id) {
+      return res.status(400).json({ ok: false, error: "room_id and mem_id required" });
+    }
+    const owner = await isOwner(room_id, mem_id);
+    if (!owner) {
+      return res.status(403).json({ ok: false, error: "권한 없음" });
+    }
+    const history = await getRecentAiMessages(room_id, 20);
+    return res.json({ ok: true, history });
+  } catch (e) {
+    console.error("/history error:", e);
+    return res.status(500).json({ ok: false, error: e?.message || "failed" });
+  }
+}
+
+export default { handleQuery, handleQueryGet, handleQueryCompare, handleQueryStream, handleGetHistory };

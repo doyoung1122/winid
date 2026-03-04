@@ -38,27 +38,56 @@ const vllmEmbedder = {
 };
 
 // ---- Collection cache ----
+// Promise-deduplication prevents concurrent getOrCreateCollection races
 let _collection = null;
+let _collectionPromise = null;
 let _statsCollection = null;
+let _statsCollectionPromise = null;
 
 async function getCollection() {
   if (_collection) return _collection;
-  _collection = await client.getOrCreateCollection({
-    name: "vfims_documents",
-    embeddingFunction: null,
-    metadata: { "hnsw:space": "cosine" },
-  });
-  return _collection;
+  if (!_collectionPromise) {
+    _collectionPromise = client.getOrCreateCollection({
+      name: "vfims_documents",
+      embeddingFunction: null,
+      metadata: { "hnsw:space": "cosine" },
+    }).then((col) => {
+      _collection = col;
+      _collectionPromise = null;
+      return col;
+    }).catch((err) => {
+      _collectionPromise = null;
+      throw err;
+    });
+  }
+  return _collectionPromise;
 }
 
 async function getStatsCollection() {
   if (_statsCollection) return _statsCollection;
-  _statsCollection = await client.getOrCreateCollection({
-    name: "vfims_stats",
-    embeddingFunction: null,
-    metadata: { "hnsw:space": "cosine" },
-  });
-  return _statsCollection;
+  if (!_statsCollectionPromise) {
+    _statsCollectionPromise = client.getOrCreateCollection({
+      name: "vfims_stats",
+      embeddingFunction: null,
+      metadata: { "hnsw:space": "cosine" },
+    }).then((col) => {
+      _statsCollection = col;
+      _statsCollectionPromise = null;
+      return col;
+    }).catch((err) => {
+      _statsCollectionPromise = null;
+      throw err;
+    });
+  }
+  return _statsCollectionPromise;
+}
+
+// Invalidate collection caches (e.g. after external deletion)
+function resetCollectionCache() {
+  _collection = null;
+  _collectionPromise = null;
+  _statsCollection = null;
+  _statsCollectionPromise = null;
 }
 
 // ---- helpers ----
@@ -85,21 +114,41 @@ let idCounter = 0;
 async function insertDocumentWithEmbedding(content, metadata, embedding) {
   if (embedding.length !== 1024) throw new Error("Dimension mismatch");
 
-  const col = await getCollection();
   const embNorm = l2Normalize(embedding);
   const docId = `doc_${Date.now()}_${idCounter++}`;
-
-  // ChromaDB metadata must be flat (string/number/bool only)
   const flatMeta = flattenMetadata(metadata ?? {});
 
-  await col.add({
-    ids: [docId],
-    embeddings: [embNorm],
-    documents: [content],
-    metadatas: [flatMeta],
-  });
-
-  return docId;
+  // Retry up to 3 times to handle transient ChromaDB errors
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const col = await getCollection();
+    try {
+      await col.upsert({
+        ids: [docId],
+        embeddings: [embNorm],
+        documents: [content],
+        metadatas: [flatMeta],
+      });
+      return docId;
+    } catch (err) {
+      const msg = err.message || "";
+      // Stale collection reference (collection deleted externally) → reset cache & retry
+      if (attempt < 2 && (msg.includes("does not exist") || (msg.includes("Bad request") && msg.includes(docId.split("_")[1])))) {
+        console.warn("[chroma] Collection stale, resetting cache and retrying...");
+        resetCollectionCache();
+        continue;
+      }
+      // "already exists" on upsert = concurrent insert won, treat as success
+      if (msg.includes("already exists")) {
+        return docId;
+      }
+      // Transient error on new collection → wait & retry once
+      if (attempt < 2 && (msg.includes("resource") || msg.includes("timeout"))) {
+        await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 /**
