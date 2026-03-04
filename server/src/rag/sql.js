@@ -247,13 +247,19 @@ function validateSQL(sql) {
   const isCaseTbl = /FROM\s+vfs_data_csv\b/i.test(clean);
 
   // vfs_data_api: stat_type 없으면 기본값 '시도별' 자동 주입 (중복 집계 방지)
-  if (!isCaseTbl && !/\bstat_type\s*=/i.test(clean)) {
+  // stat_type = 또는 stat_type IN 모두 없을 때만 주입
+  if (!isCaseTbl && !/\bstat_type\s*(=|IN\b)/i.test(clean)) {
     if (/\bWHERE\b/i.test(clean)) {
       clean = clean.replace(/\bWHERE\b/i, "WHERE stat_type='시도별' AND");
     } else {
       clean = clean.replace(/\b(GROUP\s+BY|ORDER\s+BY|LIMIT)\b/i, "WHERE stat_type='시도별' $1");
       if (!/\bWHERE\b/i.test(clean)) clean += " WHERE stat_type='시도별'";
     }
+  }
+
+  // vfs_data_api: stat_type IN (...) → '시도별' 단일값으로 교정 (LLM이 복수 stat_type 생성 방지)
+  if (!isCaseTbl && /\bstat_type\s+IN\s*\(/i.test(clean)) {
+    clean = clean.replace(/\bstat_type\s+IN\s*\([^)]*\)/gi, "stat_type='시도별'");
   }
 
   // vfs_data_api: stat_type과 region 조합 교정
