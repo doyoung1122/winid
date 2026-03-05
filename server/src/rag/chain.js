@@ -330,4 +330,3 @@ export async function runRagStream({
   return { sources, rag_mode };
 }
 
-export default { runRag, runRagStream };

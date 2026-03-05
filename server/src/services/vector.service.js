@@ -158,13 +158,3 @@ ${t}
   return { context: ctx.trim(), sources };
 }
 
-export default {
-  searchByQuery,
-  calculateTop3Avg,
-  buildContext,
-  matchDocuments,
-  insertDocumentWithEmbedding,
-  insertDocAsset,
-  insertDocTable,
-  loadCache,
-};

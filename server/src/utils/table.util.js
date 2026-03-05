@@ -83,7 +83,3 @@ export function normalizeTableMeta(t) {
   return { header, rows, tsv, md, html, n_rows_hint, n_cols_hint };
 }
 
-export default {
-  toMarkdownTable,
-  normalizeTableMeta,
-};

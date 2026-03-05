@@ -133,12 +133,3 @@ export function createLimiter(concurrency = 4) {
     });
 }
 
-export default {
-  ensureDir,
-  safeBasename,
-  yyyymmdd,
-  saveOriginalFile,
-  saveDerivedImage,
-  moveDoclingImageToUploads,
-  createLimiter,
-};

@@ -70,10 +70,3 @@ export function safeJsonParse(s, fallback = null) {
   }
 }
 
-export default {
-  cleanText,
-  normalizeNumber,
-  rowToSentence,
-  sanitizeCell,
-  safeJsonParse,
-};

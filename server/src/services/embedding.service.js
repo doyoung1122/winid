@@ -73,8 +73,3 @@ export async function checkEmbeddingHealth() {
   }
 }
 
-export default {
-  getEmbedding,
-  getEmbeddingsBatch,
-  checkEmbeddingHealth,
-};

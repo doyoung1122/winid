@@ -80,11 +80,6 @@ export const MIN_TOP3_AVG = Number(process.env.MIN_TOP3_AVG || 0.55);
 export const TEXT_K = Number(process.env.TEXT_K || 5);
 export const TABLE_K = Number(process.env.TABLE_K || 10);
 export const IMAGE_K = Number(process.env.IMAGE_K || 4);
-export const STATS_K = Number(process.env.STATS_K || 20); // 통계 문서 검색 수 (일별 × stat_type 분산 대응)
-export const CASE_K  = Number(process.env.CASE_K  || 20); // 개별 사례 문서 검색 수
-export const CASE_CTX_MIN = Number(process.env.CASE_CTX_MIN || 0.75); // 사례 문서 직접 사용 최소 유사도
-export const REF_CASE_MIN = Number(process.env.REF_CASE_MIN || 0.55);  // 유사 참고 사례 최소 유사도 (0.65→0.55 완화)
-
 // =========================
 // Directory Paths
 // =========================
@@ -138,8 +133,6 @@ export default {
   TEXT_K,
   TABLE_K,
   IMAGE_K,
-  STATS_K,
-  CASE_K,
   SERVER_ROOT,
   UPLOAD_DIR,
   PUBLIC_DIR,

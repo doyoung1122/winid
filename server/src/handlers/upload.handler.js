@@ -333,4 +333,3 @@ export async function handleUpload(req, res) {
   }
 }
 
-export default { handleUpload };

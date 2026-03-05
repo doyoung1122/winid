@@ -322,4 +322,3 @@ export async function handleGetHistory(req, res) {
   }
 }
 
-export default { handleQuery, handleQueryGet, handleQueryCompare, handleQueryStream, handleGetHistory };

@@ -227,11 +227,3 @@ export async function describeImage(imagePath, docContext = "") {
   return data.choices[0]?.message?.content?.trim() || "";
 }
 
-export default {
-  callLLM,
-  callLLMStream,
-  callLLMStreamTokens,
-  checkLLMHealth,
-  withTimeout,
-  describeImage,
-};

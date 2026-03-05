@@ -171,4 +171,3 @@ ${dateLookup}
   }
 }
 
-export default { classifyIntent };

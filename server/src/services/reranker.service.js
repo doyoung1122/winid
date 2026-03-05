@@ -67,4 +67,3 @@ export async function checkRerankerHealth() {
   }
 }
 
-export default { rerank, checkRerankerHealth };
