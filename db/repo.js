@@ -1,4 +1,5 @@
 import { pool } from "./mysql.js";
+import { safeJsonParse } from "../server/src/utils/text.util.js";
 
 // 구조: { id: number, embedding: Float32Array, metadata: object }[]
 let vectorCache = [];
@@ -23,14 +24,6 @@ function l2Normalize(v) {
   const out = new Float32Array(v.length);
   for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
   return out;
-}
-
-function safeJsonParse(s, fallback = null) {
-  try {
-    return typeof s === "string" ? JSON.parse(s) : s ?? fallback;
-  } catch {
-    return fallback;
-  }
 }
 
 // ---- cache loader ----

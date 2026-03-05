@@ -1,5 +1,6 @@
 import { ChromaClient, IncludeEnum } from "chromadb";
 import { CHROMA_URL, EMB_URL, EMB_MODEL } from "../server/src/config/env.js";
+import { l2Normalize } from "./repo.js";
 
 // ---- ChromaDB Client ----
 // chromadb 3.x는 baseUrl 대신 { host, port, ssl } 방식 사용
@@ -90,18 +91,6 @@ function resetCollectionCache() {
   _statsCollectionPromise = null;
 }
 
-// ---- helpers ----
-function l2Normalize(v) {
-  if (!v || v.length === 0) throw new Error("l2Normalize: invalid vector");
-  let sum = 0;
-  for (let i = 0; i < v.length; i++) sum += v[i] * v[i];
-  const n = Math.sqrt(sum) || 1;
-  if (n === 1) return Array.from(v);
-  const out = new Array(v.length);
-  for (let i = 0; i < v.length; i++) out[i] = v[i] / n;
-  return out;
-}
-
 // ---- counter for unique IDs ----
 let idCounter = 0;
 
@@ -114,7 +103,7 @@ let idCounter = 0;
 async function insertDocumentWithEmbedding(content, metadata, embedding) {
   if (embedding.length !== 1024) throw new Error("Dimension mismatch");
 
-  const embNorm = l2Normalize(embedding);
+  const embNorm = Array.from(l2Normalize(embedding));
   const docId = `doc_${Date.now()}_${idCounter++}`;
   const flatMeta = flattenMetadata(metadata ?? {});
 
@@ -199,7 +188,7 @@ async function matchDocuments(queryEmbedding, options = {}) {
 
   // stats 문서는 전용 컬렉션 사용 (대형 컬렉션 HNSW 오류 방지)
   const col = doc_type === "stats" ? await getStatsCollection() : await getCollection();
-  const qNorm = l2Normalize(queryEmbedding);
+  const qNorm = Array.from(l2Normalize(queryEmbedding));
 
   // Build ChromaDB where filter
   const whereConditions = [];
@@ -382,5 +371,4 @@ export {
   insertDocumentWithEmbedding,
   matchDocuments,
   loadCache,
-  l2Normalize,
 };

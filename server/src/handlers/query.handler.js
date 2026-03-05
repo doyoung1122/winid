@@ -45,6 +45,12 @@ async function compressHistoryIfNeeded(roomId) {
   }
 }
 
+function trimHistory(history) {
+  const hist = Array.isArray(history) ? [...history] : [];
+  if (hist.length > 50) hist.splice(0, hist.length - 50);
+  return hist;
+}
+
 /**
  * POST /query handler
  * @param {import('express').Request} req
@@ -77,8 +83,7 @@ export async function handleQuery(req, res) {
       if (!owner) return res.status(403).json({ ok: false, error: "권한 없음" });
       hist = await getAiHistory(room_id);
     } else {
-      hist = Array.isArray(history) ? [...history] : [];
-      if (hist.length > 50) hist.splice(0, hist.length - 50);
+      hist = trimHistory(history);
     }
 
     const result = await runRag({
@@ -256,8 +261,7 @@ export async function handleQueryStream(req, res) {
       }
       hist = await getAiHistory(room_id);
     } else {
-      hist = Array.isArray(history) ? [...history] : [];
-      if (hist.length > 50) hist.splice(0, hist.length - 50);
+      hist = trimHistory(history);
     }
 
     const heartbeat = setInterval(() => {
