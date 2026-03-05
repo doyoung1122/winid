@@ -478,6 +478,50 @@ function validateSQL(sql) {
 }
 
 // =========================
+// SQL 재시도 (조건 완화)
+// =========================
+
+async function generateSQLRelaxed(question, intent, entities, failedSql) {
+  const schema = intent === "stats" ? STATS_SCHEMA : CASE_SCHEMA;
+
+  const relaxRules = intent === "stats"
+    ? `완화 우선순위:
+1. 특정 날짜 → 연도만 또는 날짜 조건 제거
+2. 특정 지역 → region 조건 제거 (전국 기준)
+3. category 소분류 → 대분류만 유지`
+    : `완화 우선순위:
+1. district(시군구) 조건 제거, region(시도)만 유지
+2. year(연도) 조건 제거
+3. location_mid 제거, location_main만 유지
+4. 핵심 조건 1~2개만 남기기`;
+
+  const raw = await withTimeout(
+    callLLM(
+      [
+        {
+          role: "system",
+          content: `당신은 화재 데이터베이스 SQL 전문가입니다.\n\n${schema}\n\n[생성 규칙]\n- SELECT 쿼리만 허용\n- 반드시 JSON 형식으로만 응답: {"sql":"...", "note":"..."}`,
+        },
+        {
+          role: "user",
+          content: `다음 SQL이 결과 0건을 반환했습니다:\n${failedSql}\n\n조건을 완화하여 결과가 나올 수 있는 새 SQL을 생성하세요.\n\n${relaxRules}\n\n원래 질문: ${question}`,
+        },
+      ],
+      { temperature: 0.0, maxTokens: 400 }
+    ),
+    20000,
+    "sql-retry"
+  );
+
+  const m = raw.match(/\{[\s\S]*?\}/);
+  if (!m) return null;
+  const { sql } = JSON.parse(m[0]);
+  if (!sql) return null;
+  const validated = validateSQL(sql.trim());
+  return validated;
+}
+
+// =========================
 // SQL 실행
 // =========================
 
@@ -633,21 +677,17 @@ function formatCases(rows) {
 const NATIONAL_ONLY_TYPES = new Set(["건물구조","발화열원","발화요인","발화장소","발화지점",
   "선박항공기","임야","차량발화지점","최초착화물","화재장소(전국)"]);
 
-export async function queryBySQL(question, intent, entities) {
-  const { sql, note: validateNote, isLimited } = await generateSQL(question, intent, entities);
-  console.log(`[sql] ${intent}: ${sql}`);
-  const rows = await executeSQL(sql);
+// 공통: rows → context 문자열 변환
+async function buildSQLContext(rows, sql, intent, entities, extraNote, isLimited) {
   const rawContext = formatSQLResults(rows, intent);
-  if (!rawContext) return { sql, rowCount: rows.length, context: null };
+  if (!rawContext) return null;
 
-  // 전국 통계 유형인데 지역 질문이 들어온 경우 안내 메모 자동 추가
   const stMatch = sql.match(/stat_type\s*=\s*'([^']+)'/i);
   const isNationalType = stMatch && NATIONAL_ONLY_TYPES.has(stMatch[1]);
   const autoNote = (isNationalType && entities.region)
     ? `[안내: '${stMatch[1]}' 통계는 지역별 분류가 없어 전국 기준으로 제공됩니다]\n`
-    : validateNote;
+    : (extraNote || "");
 
-  // LIMIT 20 자동 적용된 경우: 전체 건수 COUNT 조회
   let totalCountNote = "";
   if (isLimited && rows.length > 0) {
     try {
@@ -663,7 +703,6 @@ export async function queryBySQL(question, intent, entities) {
     } catch (_) { /* COUNT 실패 시 무시 */ }
   }
 
-  // 조회 조건 헤더 추가 (LLM이 어떤 데이터인지 인식하도록)
   const condParts = [];
   if (entities.year)     condParts.push(`${entities.year}년`);
   const loc = [entities.region, entities.district].filter(Boolean).join(" ");
@@ -672,5 +711,35 @@ export async function queryBySQL(question, intent, entities) {
   if (entities.date_ref) condParts.push(`날짜: ${entities.date_ref}`);
   const condHeader = condParts.length > 0 ? `[조회 조건: ${condParts.join(" ")}]\n` : "";
 
-  return { sql, rowCount: rows.length, context: condHeader + autoNote + totalCountNote + rawContext };
+  return condHeader + autoNote + totalCountNote + rawContext;
+}
+
+export async function queryBySQL(question, intent, entities) {
+  const { sql, note: validateNote, isLimited } = await generateSQL(question, intent, entities);
+  console.log(`[sql] ${intent}: ${sql}`);
+  const rows = await executeSQL(sql);
+
+  if (rows && rows.length > 0) {
+    const context = await buildSQLContext(rows, sql, intent, entities, validateNote, isLimited);
+    if (context) return { sql, rowCount: rows.length, context };
+  }
+
+  // 결과 없음 → 조건 완화 재시도
+  console.log(`[sql] 결과 없음, 조건 완화 재시도`);
+  try {
+    const relaxed = await generateSQLRelaxed(question, intent, entities, sql);
+    if (relaxed && relaxed.sql !== sql) {
+      console.log(`[sql] retry: ${relaxed.sql}`);
+      const retryRows = await executeSQL(relaxed.sql);
+      if (retryRows && retryRows.length > 0) {
+        const retryNote = `[안내: 정확한 조건의 데이터가 없어 조건을 완화하여 조회한 결과입니다]\n` + (relaxed.note || "");
+        const context = await buildSQLContext(retryRows, relaxed.sql, intent, entities, retryNote, relaxed.isLimited);
+        if (context) return { sql: relaxed.sql, rowCount: retryRows.length, context };
+      }
+    }
+  } catch (e) {
+    console.warn("[sql] retry 실패:", e.message);
+  }
+
+  return { sql, rowCount: 0, context: null };
 }
