@@ -67,6 +67,7 @@ export async function handleQuery(req, res) {
       max_new_tokens = 2000,
       temperature = 0.2,
       top_p = 0.9,
+      include_context = false,
     } = req.body || {};
 
     if (!question) {
@@ -93,6 +94,7 @@ export async function handleQuery(req, res) {
       max_new_tokens,
       temperature,
       top_p,
+      include_context,
     });
 
     if (room_id && mem_id) {

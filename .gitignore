@@ -13,3 +13,4 @@ uploads
 .claude
 catboost_info
 CLAUDE.md
+eval_results/

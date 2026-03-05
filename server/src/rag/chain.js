@@ -84,7 +84,8 @@ async function _searchAndBuild(rawQuestion, history = []) {
     ];
     const searchResults = await Promise.all(searchTasks);
 
-    // 결과 병합: ID 중복 제거 후 유사도 내림차순
+    // 결과 병합: ID 중복 제거 후 유효 점수(rerank→rrf→cosine) 내림차순
+    const effectiveScore = (m) => m.rerank_score ?? m.rrf_score ?? m.similarity ?? 0;
     const seen = new Set();
     const merged = [];
     for (const r of searchResults) {
@@ -93,11 +94,12 @@ async function _searchAndBuild(rawQuestion, history = []) {
         if (!seen.has(key)) { seen.add(key); merged.push(m); }
       }
     }
-    merged.sort((a, b) => b.similarity - a.similarity);
+    merged.sort((a, b) => effectiveScore(b) - effectiveScore(a));
     const docMatches = merged.slice(0, 5);
-    const docMaxSim = docMatches.length > 0 ? docMatches[0].similarity : 0;
+    // searchByQuery가 반환한 maxSim은 rerank_score??rrf_score??similarity 기준으로 계산됨
+    const overallMaxSim = Math.max(...searchResults.map(r => r.maxSim ?? 0), 0);
 
-    const hasDoc = docMaxSim >= USE_AS_CTX_MIN && docMatches.length > 0;
+    const hasDoc = overallMaxSim >= USE_AS_CTX_MIN && docMatches.length > 0;
     if (hasDoc) {
       const { context: docCtx, sources: docSources } = buildContext(docMatches, 2500);
       if (docCtx) {
@@ -273,6 +275,7 @@ export async function runRag({
   max_new_tokens = 800,
   temperature = 0.3,
   top_p = 0.9,
+  include_context = false,
 }) {
   const { question: q, entities, systemPrompt, context, sources, rag_mode } =
     await _searchAndBuild(question, history);
@@ -287,7 +290,9 @@ export async function runRag({
     .replace(/  +/g, " ")
     .trimEnd();
 
-  return { answer, sources, rag_mode };
+  const result = { answer, sources, rag_mode };
+  if (include_context) result.context = context;
+  return result;
 }
 
 // =========================

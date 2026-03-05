@@ -160,8 +160,9 @@ export async function searchByQuery(queryText, options = {}) {
     : textCandidates.slice(0, match_count || TEXT_K);
 
   const matches = [...rerankedText, ...tableMatches, ...imageMatches];
-  const sims = matches.map((m) => m.rerank_score ?? m.rrf_score ?? m.similarity ?? 0);
-  const maxSim = sims.length ? Math.max(...sims) : 0;
+  // maxSim: 코사인 유사도 기준 (USE_AS_CTX_MIN 임계값과 스케일 일치)
+  // 리랭커/RRF 점수는 정렬용으로만 사용하고 임계값 비교엔 코사인 유사도 사용
+  const maxSim = matches.reduce((m, r) => Math.max(m, r.similarity ?? 0), 0);
 
   return { qVec, matches, maxSim };
 }

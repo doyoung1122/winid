@@ -17,7 +17,7 @@ services:
       - LLM_URL=http://host.docker.internal:8002
       - CHROMA_URL=http://chromadb:8000
       - RERANKER_URL=http://host.docker.internal:8004
-      - USE_AS_CTX_MIN=0.60
+      - USE_AS_CTX_MIN=0.55
     volumes:
       - ./uploads:/app/server/uploads
       - ./.env:/app/.env
