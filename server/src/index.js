@@ -23,6 +23,10 @@ import healthRoute from "./routes/health.route.js";
 import uploadRoute from "./routes/upload.route.js";
 import queryRoute from "./routes/query.route.js";
 
+// BM25 prebuild (ChromaDB 백엔드 전용)
+import { VECTOR_BACKEND } from "./config/env.js";
+import { searchBM25 } from "./services/bm25.service.js";
+
 
 // =========================
 // Express App Setup
@@ -71,6 +75,11 @@ app.use(queryRoute);
 // =========================
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
+
+  // BM25 인덱스 백그라운드 프리빌드 (첫 쿼리 지연 방지)
+  if (VECTOR_BACKEND === "chroma" || VECTOR_BACKEND === "both") {
+    searchBM25("warmup", 1).catch(() => {}); // 에러 무시 (ChromaDB 미준비 시)
+  }
   console.log(`   - EMB_URL = ${EMB_URL}`);
   console.log(`   - LLM_URL = ${LLM_URL}`);
   console.log(`   - ALWAYS_UNSTRUCTURED = ${ALWAYS_UNSTRUCTURED}`);

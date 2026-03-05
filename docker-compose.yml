@@ -24,6 +24,7 @@ services:
     depends_on:
       - embedding
       - llm
+      - chromadb
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

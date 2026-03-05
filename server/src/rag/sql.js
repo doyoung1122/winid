@@ -319,6 +319,7 @@ function validateSQL(sql) {
     throw new Error("허용되지 않은 접근입니다");
   }
   if (/\bUNION\b/i.test(clean)) throw new Error("허용되지 않은 접근입니다");
+  if (/\b(SHOW|DESCRIBE|DESC)\b/i.test(clean)) throw new Error("허용되지 않은 접근입니다");
   // 추가 보안: 시간지연/파일/시스템 함수 차단
   if (/\b(SLEEP|BENCHMARK|LOAD_FILE|EXTRACTVALUE|UPDATEXML|EXP)\s*\(/i.test(clean)) {
     throw new Error("허용되지 않은 접근입니다");
