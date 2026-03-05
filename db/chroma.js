@@ -355,6 +355,34 @@ export async function getCasesByMeta({ year, region, building } = {}) {
 }
 
 /**
+ * Get all text documents from the main collection.
+ * Used for building the BM25 keyword search index.
+ * @param {{textOnly?: boolean, limit?: number}} options
+ * @returns {Promise<Array<{id, content, metadata}>>}
+ */
+export async function getAllDocuments({ textOnly = false, limit = 10000 } = {}) {
+  const col = await getCollection();
+  const queryArgs = {
+    include: [IncludeEnum.documents, IncludeEnum.metadatas],
+    limit,
+  };
+  if (textOnly) {
+    queryArgs.where = { type: { $in: ["pdf", "text", "office", "hwpx", "hwp"] } };
+  }
+  try {
+    const result = await col.get(queryArgs);
+    return (result.ids || []).map((id, i) => ({
+      id,
+      content: result.documents[i] || "",
+      metadata: unflattenMetadata(result.metadatas[i]),
+    }));
+  } catch (err) {
+    console.warn("[chroma] getAllDocuments 오류:", err.message);
+    return [];
+  }
+}
+
+/**
  * No-op: ChromaDB manages its own storage; no cache needed.
  */
 async function loadCache() {
