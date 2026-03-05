@@ -21,6 +21,7 @@ export const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || "")
 export const EMB_URL = (process.env.EMB_URL || "http://127.0.0.1:8001").replace(/\/$/, "");
 export const LLM_URL = (process.env.LLM_URL || "http://127.0.0.1:8002").replace(/\/$/, "");
 export const CHROMA_URL = (process.env.CHROMA_URL || "http://127.0.0.1:8003").replace(/\/$/, "");
+export const RERANKER_URL = (process.env.RERANKER_URL || "http://127.0.0.1:8004").replace(/\/$/, "");
 
 // =========================
 // Vector Backend
@@ -32,6 +33,7 @@ export const VECTOR_BACKEND = process.env.VECTOR_BACKEND || "chroma"; // "mysql"
 // =========================
 export const LLM_MODEL = process.env.LLM_MODEL || "qwen3";
 export const EMB_MODEL = process.env.EMB_MODEL || "BAAI/bge-m3";
+export const RERANKER_MODEL = process.env.RERANKER_MODEL || "BAAI/bge-reranker-v2-m3";
 
 // =========================
 // Document Processing
@@ -50,6 +52,9 @@ export const PUBLIC_BASE = (process.env.PUBLIC_BASE || `http://127.0.0.1:${PORT}
 // =========================
 export const ALWAYS_UNSTRUCTURED = String(process.env.ALWAYS_UNSTRUCTURED || "false") === "true";
 export const FAST_MODE = String(process.env.FAST_MODE || "false") === "true";
+export const RERANK_ENABLED = String(process.env.RERANK_ENABLED || "true") === "true";
+export const RERANK_CANDIDATE_K = Number(process.env.RERANK_CANDIDATE_K || 20);
+export const RERANK_TOP_K = Number(process.env.RERANK_TOP_K || 5);
 export const RENDER_PAGES =
   String(
     process.env.RENDER_PAGES ??
@@ -70,7 +75,7 @@ export const MAX_CHUNKS_EMB = Number(process.env.MAX_CHUNKS_EMB || 0);
 // RAG Search Thresholds
 // =========================
 export const RETRIEVE_MIN = Number(process.env.RETRIEVE_MIN || 0.35);
-export const USE_AS_CTX_MIN = Number(process.env.USE_AS_CTX_MIN || 0.65);
+export const USE_AS_CTX_MIN = Number(process.env.USE_AS_CTX_MIN || 0.60);
 export const MIN_TOP3_AVG = Number(process.env.MIN_TOP3_AVG || 0.55);
 export const TEXT_K = Number(process.env.TEXT_K || 5);
 export const TABLE_K = Number(process.env.TABLE_K || 10);
@@ -107,14 +112,19 @@ export default {
   EMB_URL,
   LLM_URL,
   CHROMA_URL,
+  RERANKER_URL,
   VECTOR_BACKEND,
   LLM_MODEL,
   EMB_MODEL,
+  RERANKER_MODEL,
   DOC_PY,
   HWP2TXT_EXE,
   PUBLIC_BASE,
   ALWAYS_UNSTRUCTURED,
   FAST_MODE,
+  RERANK_ENABLED,
+  RERANK_CANDIDATE_K,
+  RERANK_TOP_K,
   RENDER_PAGES,
   ENABLE_TABLE_INDEX,
   MAX_TABLE_ROWS_EMB,

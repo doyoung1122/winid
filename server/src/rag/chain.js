@@ -9,6 +9,7 @@ import {
   SYSTEM_SMALLTALK,
   SYSTEM_GENERAL,
   SYSTEM_RAG_DOC,
+  SYSTEM_NO_DATA_DOCUMENT,
 } from "./prompts.js";
 
 // =========================
@@ -106,7 +107,10 @@ async function _searchAndBuild(rawQuestion, history = []) {
         systemPrompt = SYSTEM_RAG_DOC;
       }
     }
-    if (!context) rag_mode = "no-data-document";
+    if (!context) {
+      rag_mode = "no-data-document";
+      systemPrompt = SYSTEM_NO_DATA_DOCUMENT;
+    }
 
   } else {
     // case: SQL + ChromaDB 병렬 조회
@@ -221,7 +225,7 @@ function buildUserContent(question, context, rag_mode, entities) {
       return `[시스템 안내] 해당 조건의 화재 사례 데이터가 데이터베이스에 없습니다. 이 사실을 명확히 알리고, 전문 지식을 바탕으로 답변하세요.\n\n${ctxNote}사용자 질문: ${question}`;
     }
     if (rag_mode === "no-data-document") {
-      return `[시스템 안내] 업로드된 화재조사 문서에서 관련 내용을 찾지 못했습니다. 보유한 전문 지식을 바탕으로 답변하되, 문서 기반 정보가 아님을 명시하세요.\n\n${ctxNote}사용자 질문: ${question}`;
+      return `${ctxNote}사용자 질문: ${question}`;
     }
     return `${ctxNote}${question}`;
   }
@@ -277,8 +281,13 @@ export async function runRag({
   // 통계 모드는 일관된 수치 답변을 위해 낮은 temperature 강제
   const effectiveTemp = rag_mode === "sql-stats" ? Math.min(temperature, 0.1) : temperature;
   const txt = await callLLMStream(messages, { maxTokens: max_new_tokens, temperature: effectiveTemp, top_p });
+  const answer = txt
+    .replace(/\s*업로드된\s*문서.*/s, "")
+    .replace(/[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/g, "")
+    .replace(/  +/g, " ")
+    .trimEnd();
 
-  return { answer: txt, sources, rag_mode };
+  return { answer, sources, rag_mode };
 }
 
 // =========================
@@ -297,11 +306,26 @@ export async function runRagStream({
 
   const messages = buildMessages(systemPrompt, history, buildUserContent(q, context, rag_mode, entities));
   const effectiveTemp = rag_mode === "sql-stats" ? Math.min(temperature, 0.1) : temperature;
+
+  // 마지막 80자를 버퍼링 → 스트림 종료 시 면책 문구 제거 후 flush
+  const HOLD = 80;
+  let pending = "";
   await callLLMStreamTokens(
     messages,
     { maxTokens: max_new_tokens, temperature: effectiveTemp, top_p },
-    (token) => onToken(token),
+    (chunk) => {
+      // CJK 문자 즉시 제거 후 버퍼
+      const clean = chunk.replace(/[\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFF]/g, "");
+      if (!clean) return;
+      pending += clean;
+      if (pending.length > HOLD) {
+        onToken(pending.slice(0, -HOLD));
+        pending = pending.slice(-HOLD);
+      }
+    },
   );
+  const tail = pending.replace(/\s*업로드된\s*문서.*/s, "").trimEnd();
+  if (tail) onToken(tail);
 
   return { sources, rag_mode };
 }

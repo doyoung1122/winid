@@ -16,6 +16,8 @@ services:
       - EMB_URL=http://host.docker.internal:8001
       - LLM_URL=http://host.docker.internal:8002
       - CHROMA_URL=http://chromadb:8000
+      - RERANKER_URL=http://host.docker.internal:8004
+      - USE_AS_CTX_MIN=0.60
     volumes:
       - ./uploads:/app/server/uploads
       - ./.env:/app/.env
@@ -71,6 +73,32 @@ services:
       --enable-prefix-caching
       --host 0.0.0.0
       --port 8002
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  reranker:
+    image: vllm/vllm-openai:latest
+    container_name: vfims-reranker
+    ports:
+      - "8004:8004"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    command: >
+      --model BAAI/bge-reranker-v2-m3
+      --host 0.0.0.0
+      --port 8004
+      --gpu-memory-utilization 0.04
+      --max-model-len 8192
+      --disable-log-stats
+      --trust-remote-code
     deploy:
       resources:
         reservations:

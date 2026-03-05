@@ -144,7 +144,9 @@ export async function handleUpload(req, res) {
     if (!req.file) return res.status(400).json({ error: "file required" });
 
     const mimetype = req.file.mimetype || "";
-    const filepath = req.file.originalname || "unknown";
+    // Multer receives filename bytes as latin1; re-decode as UTF-8 to fix Korean mojibake
+    const rawName = req.file.originalname || "unknown";
+    const filepath = Buffer.from(rawName, "latin1").toString("utf8");
     const docTitle = path.basename(filepath, path.extname(filepath));
 
     const saved = await saveOriginalFile(req.file.buffer, filepath);

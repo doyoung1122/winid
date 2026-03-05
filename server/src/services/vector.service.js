@@ -1,7 +1,9 @@
 import * as mysqlRepo from "../../../db/repo.js";
 import * as chromaRepo from "../../../db/chroma.js";
 import { getEmbedding } from "./embedding.service.js";
-import { RETRIEVE_MIN, TEXT_K, TABLE_K, IMAGE_K, VECTOR_BACKEND } from "../config/env.js";
+import { rerank } from "./reranker.service.js";
+import { RETRIEVE_MIN, TEXT_K, TABLE_K, IMAGE_K, VECTOR_BACKEND,
+         RERANK_ENABLED, RERANK_CANDIDATE_K, RERANK_TOP_K } from "../config/env.js";
 
 // MySQL-only exports (doc_assets / doc_tables are MySQL-only features)
 export const { insertDocAsset, insertDocTable } = mysqlRepo;
@@ -64,7 +66,7 @@ export async function matchDocuments(queryEmbedding, options = {}) {
  * @returns {Promise<Object>} Search results with matches
  */
 export async function searchByQuery(queryText, options = {}) {
-  const { match_count = TEXT_K, doc_sha = null, backend } = options;
+  const { match_count = TEXT_K, doc_sha = null, backend, rerank: useRerank = RERANK_ENABLED } = options;
 
   const effectiveBackend = backend || (VECTOR_BACKEND === "both" ? "mysql" : VECTOR_BACKEND);
   const repo = getRepo(effectiveBackend);
@@ -77,10 +79,13 @@ export async function searchByQuery(queryText, options = {}) {
     ...(doc_sha ? { sha256: doc_sha } : {}),
   };
 
+  // rerank 활성화 시 텍스트 후보를 RERANK_CANDIDATE_K(20)으로 확장
+  const textCandidateK = useRerank ? RERANK_CANDIDATE_K : (match_count || TEXT_K);
+
   // Search across different content types
   const textMatches = await repo.matchDocuments(qVec, {
     ...baseOpts,
-    k: match_count || TEXT_K,
+    k: textCandidateK,
     types: ["pdf", "text", "office", "hwpx", "hwp"],
   });
 
@@ -96,8 +101,13 @@ export async function searchByQuery(queryText, options = {}) {
     types: ["image_caption"],
   });
 
-  const matches = [...textMatches, ...tableMatches, ...imageMatches];
-  const sims = matches.map((m) => m.similarity ?? 0);
+  // 텍스트 청크만 rerank (표/이미지는 이미 별도 임베딩으로 정밀)
+  const rerankedText = useRerank && textMatches.length > RERANK_TOP_K
+    ? await rerank(queryText, textMatches, RERANK_TOP_K)
+    : textMatches.slice(0, match_count || TEXT_K);
+
+  const matches = [...rerankedText, ...tableMatches, ...imageMatches];
+  const sims = matches.map((m) => m.rerank_score ?? m.similarity ?? 0);
   const maxSim = sims.length ? Math.max(...sims) : 0;
 
   return { qVec, matches, maxSim };
@@ -133,7 +143,7 @@ export function buildContext(matches, maxCtx = 4000) {
     if (length + t.length > maxCtx) break;
 
     const meta = typeof m.metadata === "string" ? JSON.parse(m.metadata) : m.metadata || {};
-    const filename = (meta.filepath || "").split(/[\\/]/).pop();
+    const filename = (meta.source || meta.filepath || "").split(/[\\/]/).pop();
     const type = meta.type || "unknown";
     const page = meta.page || "N/A";
 
